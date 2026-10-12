@@ -1,0 +1,60 @@
+name: Release
+
+# Runs only for a pushed v* tag, and only after a reviewer approves the "release" environment
+# (Settings -> Environments -> release -> Required reviewers). Creates a draft GitHub release.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+      packages: write
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - run: go test -race ./...
+      - name: Binaries
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
+            os=${target%/*}; arch=${target#*/}; ext=""; [ "$os" = windows ] && ext=.exe
+            CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath -ldflags "-s -w -X main.version=$version" \
+              -o "dist/itmo-widgets-agent-$os-$arch$ext" ./cmd/itmo-widgets-agent
+          done
+          (cd dist && sha256sum * > SHA256SUMS)
+      - name: Draft GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --draft --generate-notes --prerelease
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Image tags
+        id: tags
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "list=$IMAGE:$version,$IMAGE:${version%%.*}" >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: VERSION=${{ steps.tags.outputs.version }}
+          tags: ${{ steps.tags.outputs.list }}

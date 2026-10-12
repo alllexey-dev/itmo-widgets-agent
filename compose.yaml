@@ -1,0 +1,18 @@
+# docker compose run --rm agent pair   # once: scan the QR with the phone
+# docker compose up -d
+services:
+  agent:
+    image: ghcr.io/alllexey-dev/itmo-widgets-agent:1
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 32m
+    environment:
+      IW_AGENT_NAME: nas
+      # IW_NOTIFY_NTFY_URL: https://ntfy.sh/your-long-random-topic
+    volumes:
+      - agent-data:/data
+
+volumes:
+  agent-data:
