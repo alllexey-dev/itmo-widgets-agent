@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  macOS user agent. Replace YOUR_USER, then:
+    cp deploy/dev.alllexey.itmo-widgets-agent.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.alllexey.itmo-widgets-agent.plist
+  Stop: launchctl bootout gui/$(id -u)/dev.alllexey.itmo-widgets-agent
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>dev.alllexey.itmo-widgets-agent</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/itmo-widgets-agent</string>
+    <string>run</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>60</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/YOUR_USER/Library/Logs/itmo-widgets-agent.log</string>
+</dict>
+</plist>

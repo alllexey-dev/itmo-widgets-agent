@@ -1,0 +1,20 @@
+# Linux user service. Install:
+#   install -m 755 itmo-widgets-agent ~/.local/bin/
+#   cp deploy/itmo-widgets-agent.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now itmo-widgets-agent
+#   loginctl enable-linger "$USER"   # keep running after logout
+# Logs: journalctl --user -u itmo-widgets-agent -f
+[Unit]
+Description=ITMO.Widgets self-hosted agent
+
+[Service]
+ExecStart=%h/.local/bin/itmo-widgets-agent run
+Restart=on-failure
+RestartSec=30
+# 3: agent token revoked, 4: ITMO rejected the session; restarting does not help.
+RestartPreventExitStatus=3 4
+MemoryMax=64M
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=default.target
