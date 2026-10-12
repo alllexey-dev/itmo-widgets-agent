@@ -1,0 +1,11 @@
+/dist/
+/itmo-widgets-agent
+*.exe
+/data/
+agent-token
+session.json
+state.json
+agent.env
+.idea/
+.vscode/
+.DS_Store
