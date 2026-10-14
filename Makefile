@@ -1,7 +1,7 @@
 # Same checks as CI; `make` runs them all.
 VERSION ?= dev
 LDFLAGS := -s -w -X main.version=$(VERSION)
-TARGETS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64
+TARGETS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 freebsd/amd64 freebsd/arm64 windows/amd64
 
 .PHONY: check fmt vet test vuln build cross image
 check: fmt vet test vuln build

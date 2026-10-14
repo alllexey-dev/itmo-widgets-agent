@@ -1,6 +1,7 @@
 # Runs install.ps1 against a fake release: scripts/install-test.ps1 INSTALLER VERSION.
 # IW_RELEASE_BASE serves VERSION/<assets> with a good SHA256SUMS and bad/<assets> with a wrong one.
-# Pairing is skipped through a token fixture. Registers and removes a real logon task.
+# Pairing is skipped through a token fixture. Answers n to the service question, then registers and removes a real
+# logon task.
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'Installer', Justification = 'used in Invoke-Installer')]
 param([string]$Installer, [string]$V)
 $ErrorActionPreference = 'Stop'
@@ -23,6 +24,14 @@ $out = Invoke-Installer -Status -Version $V
 Assert-True ($out -match "Агент:   $($V.TrimStart('v')) \(последняя\)") 'status: version'
 Assert-True ($out -match 'Телефон: подключён') 'status: paired'
 Assert-True ($out -match 'Служба:  не установлена') 'status: service'
+
+# A console answering "n" to the service question: no task.
+Set-Content "$root\answers" 'n'
+$env:IW_TTY = "$root\answers"
+$out = Invoke-Installer -Install -Version $V
+Remove-Item Env:IW_TTY
+Assert-True ($out -match 'Запускать агента в фоне как службу') 'no service question'
+Assert-True (-not (Get-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue)) 'the answer n left a task'
 
 $before = (Get-FileHash $exe).Hash
 try { Invoke-Installer -Install -NoService -Version bad | Out-Null; $installed = $true } catch { $installed = $false }
