@@ -57,16 +57,20 @@ jobs:
           (cd fake/$v && shasum -a 256 itmo-widgets-agent-* > SHA256SUMS)
           cp fake/$v/itmo-widgets-agent-* fake/bad/
           awk '{ print "0000000000000000000000000000000000000000000000000000000000000000  " $2 }' fake/$v/SHA256SUMS > fake/bad/SHA256SUMS
-          nohup python3 -m http.server 8765 --bind 127.0.0.1 --directory fake > /dev/null 2>&1 &
-      - name: install.sh in a Linux container
-        if: runner.os == 'Linux'
-        run: docker run --rm --network host -e IW_RELEASE_BASE -v "$PWD:/src:ro" curlimages/curl sh /src/scripts/install-test.sh /src/install.sh v0.0.0-ci
-      - name: install.sh on macOS
-        if: runner.os == 'macOS'
-        run: sh scripts/install-test.sh "$PWD/install.sh" v0.0.0-ci
-      - name: The background service
-        # The runner's own session, a token fixture and an unreachable Backend: the service starts and keeps retrying.
+      - name: install.sh
+        # The server lives as long as this step. In a Linux container (curl, busybox) or on macOS.
         run: |
+          python3 -m http.server 8765 --bind 127.0.0.1 --directory fake > /dev/null 2>&1 &
+          until curl -fs "$IW_RELEASE_BASE/" > /dev/null; do sleep 0.2; done
+          if [ "$RUNNER_OS" = Linux ]; then
+            docker run --rm --network host -e IW_RELEASE_BASE -v "$PWD:/src:ro" curlimages/curl \
+              sh /src/scripts/install-test.sh /src/install.sh v0.0.0-ci
+          else
+            sh scripts/install-test.sh "$PWD/install.sh" v0.0.0-ci
+          fi
+
+          # The service in the runner's own session, with a token fixture and an unreachable Backend:
+          # it starts and keeps retrying.
           if [ "$RUNNER_OS" = Linux ]; then
             sudo loginctl enable-linger "$USER"
             export XDG_RUNTIME_DIR=/run/user/$(id -u)
@@ -96,8 +100,8 @@ jobs:
       - name: PSScriptAnalyzer
         shell: pwsh
         run: |
-          $issues = Invoke-ScriptAnalyzer -Path install.ps1, scripts/install-test.ps1 `
-            -ExcludeRule PSAvoidUsingWriteHost, PSUseBOMForUnicodeEncodedFile, PSUseShouldProcessForStateChangingFunctions
+          $issues = 'install.ps1', 'scripts/install-test.ps1' | ForEach-Object { Invoke-ScriptAnalyzer -Path $_ `
+            -ExcludeRule PSAvoidUsingWriteHost, PSUseBOMForUnicodeEncodedFile, PSUseShouldProcessForStateChangingFunctions }
           $issues | Format-Table -AutoSize -Wrap RuleName, ScriptName, Line, Message
           if ($issues) { exit 1 }
       - name: Fake release
