@@ -37,8 +37,9 @@ clock is injected.
 
 | Path | What |
 |---|---|
-| `cmd/itmo-widgets-agent` | CLI: `run`, `pair [--session]`, `login`, `status`, `unpair`, `health`, `--ui`; exit codes |
-| `internal/agent` | the poll loop: cursor, dedup ids, backoff, 401 wipe, waiting for a token, ITMO session state, `unpair`, health and status |
+| `cmd/itmo-widgets-agent` | CLI: `run`, `pair [--session]`, `login`, `status`, `attach`, `unpair`, `health`, `--ui`; exit codes |
+| `internal/agent` | the poll loop: cursor, dedup ids, backoff, 401 wipe, waiting for a token, ITMO session state, `unpair`, health and status; `Loop` tracks a running loop for the screen and the socket |
+| `internal/control` | the running agent's Unix socket for `attach` and `status`: line-delimited JSON, owner-only |
 | `internal/backend` | Backend client for the routes an agent token may call |
 | `internal/itmo` | minimal ITMO.ID and My ITMO client (see below) |
 | `internal/sport` | booking on `SPORT_*_SIGN_LESSONS_PAYLOAD` events |
@@ -57,10 +58,26 @@ clock is injected.
 `run` and `pair` draw a screen when stdin and stdout are a terminal (`IW_UI` or `--ui` force `tui` or `plain`).
 It is plain ANSI with `golang.org/x/term` for raw mode, not Bubble Tea: measured on 2026-10-14 (linux/arm64,
 stripped), Bubble Tea v2 with Lip Gloss v2 added 1.5 MB to the binary, 15 modules and 5.6 MB of idle RSS
-(10.4 MB vs 4.8 MB for the same screen), while x/term adds about 0.1 MB. The screen reads `state.json` and
-`session.json` once a second, so it shows the same thing whether the poll loop runs in the process or not; logs go
-to an in-memory ring shown at the bottom. Screen captures in `docs/screens/` are plain text; refresh them by hand
-when the layout changes.
+(10.4 MB vs 4.8 MB for the same screen), while x/term adds about 0.1 MB. The screen draws an `agent.Live` once a
+second: `state.json` and `session.json` read from disk, the poll loop's own state and the last lines of an in-memory
+log ring (text lines, redacted; in plain mode the logger writes JSON to stderr and the same ring). Screen captures in
+`docs/screens/` are plain text; refresh them by hand when the layout changes.
+
+`attach` draws the same screen from another process. Every `run` listens on `agent.sock` in the state directory
+(`internal/control`; the directory is chmod 0700 before the socket exists, the socket 0600; on Windows the profile
+folder's ACL). One JSON object per line:
+
+- agent to client: `{"status":{...agent.Live...}}` on connect and whenever it changes (checked once a second), and
+  `{"reply":{"cmd":"unpair","message":"...","error":"..."}}` after a command;
+- client to agent: `{"cmd":"unpair"}`. The agent stops the loop, unpairs, and starts the loop again, which waits for a
+  new token.
+
+A new ITMO session or a new pairing is no command: `attach` runs the pairing screen itself, like `pair --session`
+next to a running service, and the agent picks up the new files. Live holds no secret, and every outgoing line also
+passes `redact.String`. On start a socket nobody answers on is a leftover and is replaced; one that answers means
+another agent runs with this directory and `run` exits. Closing the listener removes the file. Cost, measured on
+2026-10-14 (stripped): +66 KB on darwin/arm64, +68 KB on linux/amd64 and windows/amd64, +128 KB on linux/arm64
+(section alignment); idle RSS on linux/arm64 about +0.2 MB (6.8-7.4 MB before, 7.2-7.5 MB after over 90 s).
 
 ## Contracts
 

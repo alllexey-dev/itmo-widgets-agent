@@ -114,13 +114,13 @@ func Status(files state.Files, live *Live, now time.Time, out io.Writer) error {
 	}
 	switch {
 	case live == nil:
-		fmt.Fprintln(out, "Агент: не отвечает, данные из state.json")
+		fmt.Fprintln(out, "Запущен: не отвечает, данные из state.json")
 	case live.Running:
-		fmt.Fprintf(out, "Агент: работает с %s (экран: itmo-widgets-agent attach)\n", live.Started.Local().Format("02.01 15:04"))
+		fmt.Fprintf(out, "Запущен: да, с %s (экран: itmo-widgets-agent attach)\n", live.Started.Local().Format("02.01 15:04"))
 	case live.Stopped != "":
-		fmt.Fprintf(out, "Агент: запущен, опрос остановлен: %s\n", live.Stopped)
+		fmt.Fprintf(out, "Запущен: да, опрос остановлен: %s\n", live.Stopped)
 	default:
-		fmt.Fprintln(out, "Агент: запущен, опрос не идёт")
+		fmt.Fprintln(out, "Запущен: да, опрос не идёт")
 	}
 	conn := "нет связи"
 	if r.Online(now) {

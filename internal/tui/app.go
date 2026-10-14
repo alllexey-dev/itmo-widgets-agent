@@ -243,7 +243,8 @@ func (a *App) status(ctx context.Context, loop *agent.Loop) (bool, error) {
 			case k == 'q':
 				halt()
 				return false, revoked()
-			case gone && k == 'p':
+			case (gone || !loop.Live().HasToken) && k == 'p':
+				halt()
 				a.notice = ""
 				return true, nil
 			case gone:
@@ -307,16 +308,18 @@ func (a *App) statusFrame(l agent.Live, confirm, attached bool) string {
 		conn = yellow("● подключаемся…")
 	}
 	row(&b, "Сервер", conn)
-	switch r.Session {
-	case agent.SessionOK:
+	switch {
+	case !r.HasToken:
+		row(&b, "Сессия ИТМО", dim("нет"))
+	case r.Session == agent.SessionOK:
 		s := green("действует")
 		if !r.Expires.IsZero() {
 			s += fmt.Sprintf(" до %s (ещё %s)", r.Expires.Local().Format("02.01 15:04"), days(r.Expires.Sub(now)))
 		}
 		row(&b, "Сессия ИТМО", s+dim(fmt.Sprintf(", ISU %d, обновлена %s", r.Isu, ago(now, r.Refreshed))))
-	case agent.SessionClosed:
+	case r.Session == agent.SessionClosed:
 		row(&b, "Сессия ИТМО", red("закрыта ИТМО")+" - нажмите [s]")
-	case agent.SessionDamaged:
+	case r.Session == agent.SessionDamaged:
 		row(&b, "Сессия ИТМО", red("файл повреждён")+" - нажмите [s]")
 	default:
 		row(&b, "Сессия ИТМО", yellow("нет")+" - нажмите [s]")
@@ -363,6 +366,8 @@ func (a *App) statusFrame(l agent.Live, confirm, attached bool) string {
 		b.WriteString(dim(quit))
 	case l.Revoked:
 		b.WriteString(dim("[p] подключить заново   " + quit))
+	case !r.HasToken:
+		b.WriteString(dim("[p] подключить   " + quit))
 	case confirm:
 		b.WriteString(yellow("Отключить агент? Сервер отзовёт токен, токен и сессия ИТМО будут удалены с этой машины.") + "\n" +
 			dim("[y] да   любая клавиша - нет"))

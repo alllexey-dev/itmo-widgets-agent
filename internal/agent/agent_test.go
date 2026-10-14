@@ -367,3 +367,17 @@ func TestStatusShowsHistory(t *testing.T) {
 		t.Fatalf("status prints a secret:\n%s", out.String())
 	}
 }
+
+func TestStatusPrefersTheRunningAgent(t *testing.T) {
+	files := state.Files{Dir: t.TempDir()}
+	live := &Live{Report: Report{HasToken: true, Cursor: 42}, Running: true, Started: fake.Now, Log: []string{"msg=\"agent started\""}}
+	var out strings.Builder
+	if err := Status(files, live, fake.Now, &out); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Запущен: да", "attach", "Курсор событий: 42", "Журнал:", "agent started"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("status lacks %q:\n%s", want, out.String())
+		}
+	}
+}
