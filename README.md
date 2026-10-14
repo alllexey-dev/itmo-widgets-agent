@@ -13,7 +13,47 @@
 
 Нужен телефон с ITMO.Widgets, где вы уже вошли, и доступ к бете (его включает администратор).
 
-### Бинарник
+Linux и macOS, в терминале:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/alllexey-dev/itmo-widgets-agent/main/install.sh | sh
+```
+
+Windows, в PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/alllexey-dev/itmo-widgets-agent/main/install.ps1 | iex
+```
+
+Скрипт показывает, что уже есть (версия агента и последняя на GitHub, подключён ли телефон, работает ли
+служба), и меню: установить или обновить, подключить к телефону, включить, выключить или перезапустить
+службу, статус и логи, отключить агента (`unpair`), удалить полностью. Пункты, которые сейчас не имеют
+смысла, не показываются; отключение и удаление спрашивают подтверждение.
+
+Установка берёт последний релиз (включая предварительные), сверяет SHA-256 с `SHA256SUMS` и не требует прав
+администратора:
+
+- Linux: `~/.local/bin/itmo-widgets-agent`, служба `systemd --user` и `loginctl enable-linger`, чтобы
+  агент работал и после выхода из системы. Логи: `journalctl --user -u itmo-widgets-agent -f`.
+- macOS: `~/.local/bin/itmo-widgets-agent`, агент launchd `dev.alllexey.itmo-widgets-agent`. Логи:
+  `~/Library/Logs/itmo-widgets-agent.log`.
+- Windows: `%LOCALAPPDATA%\itmo-widgets-agent`, задача планировщика «ITMO.Widgets agent» при входе в
+  Windows, без окна. Логи: `agent.log` в той же папке.
+
+Без терминала (Docker, CI, скрипты) меню нет: скрипт ставит агент и службу. Действие можно задать
+флагом, например `curl -fsSL .../install.sh | sh -s -- --uninstall --yes`. Флаги: `--install`, `--pair`,
+`--service on|off|restart`, `--status`, `--unpair`, `--uninstall`, `--no-service`, `--version v0.1.0`
+(или `IW_VERSION`), `--yes`. В PowerShell те же параметры с одним дефисом:
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/alllexey-dev/itmo-widgets-agent/main/install.ps1))) -Uninstall -Yes
+```
+
+Повторная установка обновляет агент на месте и перезапускает службу. Удаление останавливает службу,
+выполняет `unpair` и удаляет программу и файл службы; в папке настроек остаются только `state.json` и
+`agent.env`, без токенов.
+
+### Бинарник вручную
 
 Скачайте файл для своей системы со [страницы релизов](https://github.com/alllexey-dev/itmo-widgets-agent/releases):
 `itmo-widgets-agent-<os>-<arch>` для `linux-amd64`, `linux-arm64`, `darwin-amd64`, `darwin-arm64` или

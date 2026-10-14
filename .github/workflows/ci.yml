@@ -32,3 +32,92 @@ jobs:
           ls -l dist
       - name: Docker build
         run: docker build --build-arg VERSION=ci -t itmo-widgets-agent:ci .
+
+  install-sh:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      IW_RELEASE_BASE: http://127.0.0.1:8765
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: shellcheck
+        if: runner.os == 'Linux'
+        run: shellcheck install.sh scripts/install-test.sh
+      - name: Fake release
+        run: |
+          v=v0.0.0-ci; mkdir -p fake/$v fake/bad
+          CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${v#v}" \
+            -o "fake/$v/itmo-widgets-agent-$(go env GOOS)-$(go env GOARCH)" ./cmd/itmo-widgets-agent
+          (cd fake/$v && shasum -a 256 itmo-widgets-agent-* > SHA256SUMS)
+          cp fake/$v/itmo-widgets-agent-* fake/bad/
+          awk '{ print "0000000000000000000000000000000000000000000000000000000000000000  " $2 }' fake/$v/SHA256SUMS > fake/bad/SHA256SUMS
+      - name: install.sh
+        # The server lives as long as this step. In a Linux container (curl, busybox) or on macOS.
+        run: |
+          python3 -m http.server 8765 --bind 127.0.0.1 --directory fake > /dev/null 2>&1 &
+          until curl -fs "$IW_RELEASE_BASE/" > /dev/null; do sleep 0.2; done
+          if [ "$RUNNER_OS" = Linux ]; then
+            docker run --rm --network host -e IW_RELEASE_BASE -v "$PWD:/src:ro" curlimages/curl \
+              sh /src/scripts/install-test.sh /src/install.sh v0.0.0-ci
+          else
+            sh scripts/install-test.sh "$PWD/install.sh" v0.0.0-ci
+          fi
+
+          # The service in the runner's own session, with a token fixture and an unreachable Backend:
+          # it starts and keeps retrying.
+          if [ "$RUNNER_OS" = Linux ]; then
+            sudo loginctl enable-linger "$USER"
+            export XDG_RUNTIME_DIR=/run/user/$(id -u)
+            for _ in 1 2 3 4 5 6 7 8 9 10; do [ -S "$XDG_RUNTIME_DIR/bus" ] && break; sleep 1; done
+            state="$HOME/.config/itmo-widgets-agent"
+          else
+            state="$HOME/Library/Application Support/itmo-widgets-agent"
+          fi
+          mkdir -p "$state"
+          echo iwa_test_fixture > "$state/agent-token"
+          echo IW_BACKEND_URL=http://127.0.0.1:9 > "$state/agent.env"
+          sh install.sh --version v0.0.0-ci
+          sleep 3
+          out=$(sh install.sh --status --version v0.0.0-ci); echo "$out"
+          echo "$out" | grep -q 'Служба:  работает'
+          sh install.sh --uninstall --yes
+          [ ! -e "$HOME/.local/bin/itmo-widgets-agent" ] && [ ! -e "$state/agent-token" ]
+          sh install.sh --status --version v0.0.0-ci | grep -q 'не установлен'
+
+  install-ps1:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          $issues = 'install.ps1', 'scripts/install-test.ps1' | ForEach-Object { Invoke-ScriptAnalyzer -Path $_ `
+            -ExcludeRule PSAvoidUsingWriteHost, PSUseBOMForUnicodeEncodedFile, PSUseShouldProcessForStateChangingFunctions }
+          $issues | Format-Table -AutoSize -Wrap RuleName, ScriptName, Line, Message
+          if ($issues) { exit 1 }
+      - name: Fake release
+        shell: bash
+        run: |
+          v=v0.0.0-ci; mkdir -p fake/$v fake/bad
+          CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${v#v}" \
+            -o "fake/$v/itmo-widgets-agent-windows-amd64.exe" ./cmd/itmo-widgets-agent
+          (cd fake/$v && sha256sum itmo-widgets-agent-* > SHA256SUMS)
+          cp fake/$v/itmo-widgets-agent-* fake/bad/
+          awk '{ print "0000000000000000000000000000000000000000000000000000000000000000  " $2 }' fake/$v/SHA256SUMS > fake/bad/SHA256SUMS
+      - name: install.ps1
+        shell: pwsh
+        env:
+          IW_RELEASE_BASE: http://127.0.0.1:8765
+        run: |
+          Start-Process python -ArgumentList '-m', 'http.server', '8765', '--bind', '127.0.0.1', '--directory', 'fake' -WindowStyle Hidden
+          Start-Sleep 2
+          ./scripts/install-test.ps1 -Installer ./install.ps1 -V v0.0.0-ci
