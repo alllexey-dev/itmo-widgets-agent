@@ -22,7 +22,8 @@ $Log = Join-Path $Dir 'agent.log'
 $Task = 'ITMO.Widgets agent'
 # Test-only: a local server with the release assets instead of GitHub.
 $ReleaseBase = if ($env:IW_RELEASE_BASE) { $env:IW_RELEASE_BASE } else { "https://github.com/$Repo/releases/download" }
-$Interactive = [Environment]::UserInteractive -and -not [Console]::IsInputRedirected
+# Test-only: IW_TTY is a file with the answers instead of the console.
+$Interactive = $env:IW_TTY -or ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected)
 $Mods = $NoService -or $Yes -or $PSBoundParameters.ContainsKey('Version')
 
 function Get-Latest {
@@ -49,7 +50,15 @@ function Get-ServiceState {
 function Confirm-Action([string]$Question) {
     if ($Yes) { return $true }
     if (-not $Interactive) { throw "$Question Без консоли добавьте -Yes" }
-    (Read-Host "$Question [y/N]") -match '^(y|yes|д|да)$'
+    (Read-Answer "$Question [y/N]") -match '^(y|yes|д|да)$'
+}
+
+# Confirm-Default is a question that defaults to yes; it needs a console.
+function Confirm-Default([string]$Question) { (Read-Answer "$Question [Y/n]") -notmatch '^(n|no|н|нет)$' }
+
+function Read-Answer([string]$Question) {
+    if ($env:IW_TTY) { Write-Host $Question; return Get-Content $env:IW_TTY -TotalCount 1 }
+    Read-Host $Question
 }
 
 function Stop-Agent {
@@ -113,9 +122,14 @@ function Invoke-Install {
     $was = Get-ServiceState
     Install-Binary
     if (Test-Paired) { Write-Host 'Телефон уже подключён, pair пропущен.' } else { Invoke-Pair }
-    # A fresh install gets the task; an upgrade keeps the user's choice and restarts it.
+    # An existing task is restarted without asking. Otherwise a console asks; without one a fresh install gets the
+    # task and an upgrade keeps the user's choice.
     if ($NoService) { Write-Host "Служба не установлена (-NoService). Запуск вручную: & `"$Exe`" run" }
-    elseif ($fresh -or $was -ne 'none') { Enable-Service }
+    elseif ($was -ne 'none') { Enable-Service }
+    elseif ($Interactive -and -not $Yes) {
+        if (Confirm-Default 'Запускать агента в фоне как службу (автозапуск)?') { Enable-Service }
+        else { Write-Host 'Служба не создана. Включить потом: этот скрипт, пункт «Включить службу».' }
+    } elseif ($fresh -or $Yes) { Enable-Service }
 }
 
 function Show-State {

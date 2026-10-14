@@ -24,7 +24,7 @@ go build -trimpath -ldflags "-s -w -X main.version=dev" ./cmd/itmo-widgets-agent
 Cross-build check (what CI runs):
 
 ```sh
-for t in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
+for t in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 freebsd/amd64 freebsd/arm64 windows/amd64; do
   CGO_ENABLED=0 GOOS=${t%/*} GOARCH=${t#*/} go build -trimpath -ldflags "-s -w" -o /dev/null ./cmd/itmo-widgets-agent
 done
 docker build -t itmo-widgets-agent:dev .
@@ -49,7 +49,7 @@ clock is injected.
 | `internal/config` | environment and `agent.env` |
 | `internal/tui` | the terminal screen: pairing and status, plain ANSI over `golang.org/x/term` |
 | `internal/redact` | masks token-like strings in every log line |
-| `deploy/` | launchd and systemd examples; `install.sh` fetches them from the release tag and fills in the paths |
+| `deploy/` | launchd, systemd and FreeBSD rc.d examples; `install.sh` fetches them from the release tag and fills in the paths |
 | `install.sh`, `install.ps1` | one-command installers with a menu; `scripts/install-test.*` run them in CI against a fake release (`IW_RELEASE_BASE`) |
 
 ## The terminal screen
