@@ -134,7 +134,7 @@ jobs:
       - name: Test binaries and a fake release
         run: |
           mkdir -p tests
-          for p in $(go list -f '{{if .TestGoFiles}}{{.Dir}}{{end}}' ./...); do
+          for p in $(go list -f '{{if or .TestGoFiles .XTestGoFiles}}{{.Dir}}{{end}}' ./...); do
             rel=${p#"$PWD/"}
             CGO_ENABLED=0 GOOS=freebsd GOARCH=amd64 go test -c -o "tests/$(echo "$rel" | tr / _).test" "./$rel"
           done
@@ -168,12 +168,12 @@ jobs:
             sh -e root.sh
             sleep 3
             service itmo_widgets_agent status
-            pgrep -U agent -f 'itmo-widgets-agent run'
+            pgrep -U agent -x itmo-widgets-agent
             su -l agent -c "IW_RELEASE_BASE=$IW_RELEASE_BASE sh $PWD/install.sh --status --version v0.0.0-ci" | grep 'Служба:  работает'
             cat /var/log/itmo_widgets_agent.log
             service itmo_widgets_agent stop
-            sysrc -x itmo_widgets_agent_enable itmo_widgets_agent_user itmo_widgets_agent_program
-            rm -f /usr/local/etc/rc.d/itmo_widgets_agent /var/log/itmo_widgets_agent.log
+            sysrc -x itmo_widgets_agent_enable itmo_widgets_agent_user itmo_widgets_agent_bin
+            rm -rf /usr/local/etc/rc.d/itmo_widgets_agent /var/log/itmo_widgets_agent.log /var/run/itmo_widgets_agent
 
             # As root the installer runs the same commands itself; uninstall removes them.
             mkdir -p /root/.config/itmo-widgets-agent

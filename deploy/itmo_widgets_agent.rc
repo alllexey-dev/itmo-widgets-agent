@@ -8,10 +8,10 @@
 # FreeBSD rc.d script for the ITMO.Widgets agent. As root:
 #   install -m 555 deploy/itmo_widgets_agent.rc /usr/local/etc/rc.d/itmo_widgets_agent
 #   sysrc itmo_widgets_agent_enable=YES itmo_widgets_agent_user=YOUR_USER \
-#     itmo_widgets_agent_program=/home/YOUR_USER/.local/bin/itmo-widgets-agent
+#     itmo_widgets_agent_bin=/home/YOUR_USER/.local/bin/itmo-widgets-agent
 #   service itmo_widgets_agent start
-# The agent runs as itmo_widgets_agent_user with that user's HOME, so `pair` run as the same user finds its files.
-# daemon(8) restarts it 30 s after an exit. Logs: /var/log/itmo_widgets_agent.log
+# daemon(8) and the agent run as itmo_widgets_agent_user with that user's HOME, so `pair` run as the same user finds
+# the same files. daemon restarts the agent 30 s after an exit. Logs: /var/log/itmo_widgets_agent.log
 
 . /etc/rc.subr
 
@@ -21,20 +21,23 @@ load_rc_config $name
 
 : "${itmo_widgets_agent_enable:=NO}"
 : "${itmo_widgets_agent_user:=nobody}"
-: "${itmo_widgets_agent_program:=/usr/local/bin/itmo-widgets-agent}"
+: "${itmo_widgets_agent_bin:=/usr/local/bin/itmo-widgets-agent}"
 : "${itmo_widgets_agent_logfile:=/var/log/${name}.log}"
 
-pidfile="/var/run/${name}.pid"
+# The pid file and the log belong to the user: rc.subr starts daemon(8) as itmo_widgets_agent_user.
+piddir="/var/run/${name}"
+pidfile="${piddir}/${name}.pid"
 command=/usr/sbin/daemon
-# daemon(8) itself runs as root to keep the pid file and the log; -u drops the agent to the user.
-command_args="-r -R 30 -P ${pidfile} -o ${itmo_widgets_agent_logfile} -u ${itmo_widgets_agent_user} \
+command_args="-r -R 30 -P ${pidfile} -o ${itmo_widgets_agent_logfile} \
 	/usr/bin/env HOME=$(getent passwd "${itmo_widgets_agent_user}" | cut -d: -f6) \
-	${itmo_widgets_agent_program} run --ui=plain"
+	${itmo_widgets_agent_bin} run --ui=plain"
 start_precmd="${name}_precmd"
 
 itmo_widgets_agent_precmd()
 {
-	[ -e "${itmo_widgets_agent_logfile}" ] || install -o "${itmo_widgets_agent_user}" -m 640 /dev/null "${itmo_widgets_agent_logfile}"
+	install -d -o "${itmo_widgets_agent_user}" -m 755 "${piddir}"
+	[ -e "${itmo_widgets_agent_logfile}" ] ||
+		install -o "${itmo_widgets_agent_user}" -m 640 /dev/null "${itmo_widgets_agent_logfile}"
 }
 
 run_rc_command "$1"

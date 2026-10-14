@@ -47,7 +47,7 @@ irm https://raw.githubusercontent.com/alllexey-dev/itmo-widgets-agent/main/insta
 - Windows: `%LOCALAPPDATA%\itmo-widgets-agent`, задача планировщика «ITMO.Widgets agent» при входе в
   Windows, без окна. Логи: `agent.log` в той же папке.
 - FreeBSD: `~/.local/bin/itmo-widgets-agent`, скрипт rc.d `/usr/local/etc/rc.d/itmo_widgets_agent`
-  (`daemon(8)`, агент работает от вашего пользователя, включается через `sysrc`). Для этого нужен root:
+  (`daemon(8)` от вашего пользователя, включается через `sysrc`). Для этого нужен root:
   скрипт покажет команды и выполнит их через `sudo` или `doas`, только если вы согласитесь, иначе просто
   напечатает их. Логи: `/var/log/itmo_widgets_agent.log`.
 

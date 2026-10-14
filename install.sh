@@ -170,7 +170,8 @@ install_binary() {
 	[ -n "$want" ] && [ "$want" = "$got" ] || die "контрольная сумма $asset не совпала с SHA256SUMS, файл не установлен"
 	chmod 755 "$tmp/$asset" && mkdir -p "$BIN_DIR" || die "не удалось создать $BIN_DIR"
 	[ "$os" = darwin ] && xattr -d com.apple.quarantine "$tmp/$asset" 2>/dev/null
-	mv -f "$tmp/$asset" "$BIN" || die "не удалось записать $BIN"
+	# Copy next to the target, then rename: atomic, and no foreign owner from the temp directory.
+	cp "$tmp/$asset" "$BIN.new" && mv -f "$BIN.new" "$BIN" || die "не удалось записать $BIN"
 	say "${G}Установлен${N} $BIN ($("$BIN" version))"
 	case ":$PATH:" in
 	*":$BIN_DIR:"*) ;;
@@ -191,8 +192,8 @@ service_off() {
 		rm -f "$PLIST"
 	elif [ "$os" = freebsd ]; then
 		as_root "service $RC_NAME onestop || true
-sysrc -x ${RC_NAME}_enable ${RC_NAME}_user ${RC_NAME}_program 2>/dev/null || true
-rm -f $RC $BSD_LOG" || return 0
+sysrc -x ${RC_NAME}_enable ${RC_NAME}_user ${RC_NAME}_bin 2>/dev/null || true
+rm -rf $RC $BSD_LOG /var/run/$RC_NAME" || return 0
 	else
 		[ -f "$UNIT" ] && has_systemd && systemctl --user disable --now "$NAME" 2>/dev/null
 		rm -f "$UNIT"
@@ -216,7 +217,7 @@ service_on() {
 		# rc.d needs root, so root fetches the script itself: the same commands work when the user runs them by hand.
 		as_root "fetch -qo $RC $deploy_url
 chmod 555 $RC
-sysrc ${RC_NAME}_enable=YES ${RC_NAME}_user=$(id -un) ${RC_NAME}_program=$BIN
+sysrc ${RC_NAME}_enable=YES ${RC_NAME}_user=$(id -un) ${RC_NAME}_bin=$BIN
 service $RC_NAME stop 2>/dev/null || true
 service $RC_NAME start" || return 0
 		say "${G}Служба rc.d $RC_NAME запущена${N} и стартует при загрузке системы."
