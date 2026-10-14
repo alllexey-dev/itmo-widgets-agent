@@ -2,7 +2,7 @@
 # docker compose up -d
 services:
   agent:
-    image: ghcr.io/alllexey-dev/itmo-widgets-agent:1
+    image: ghcr.io/alllexey-dev/itmo-widgets-agent:0
     restart: unless-stopped
     read_only: true
     cap_drop: [ALL]
