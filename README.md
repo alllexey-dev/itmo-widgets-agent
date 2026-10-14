@@ -15,9 +15,15 @@
 
 ### Бинарник
 
-Скачайте файл для своей системы со страницы релизов, положите в `PATH` и подключите:
+Скачайте файл для своей системы со [страницы релизов](https://github.com/alllexey-dev/itmo-widgets-agent/releases):
+`itmo-widgets-agent-<os>-<arch>` для `linux-amd64`, `linux-arm64`, `darwin-amd64`, `darwin-arm64` или
+`windows-amd64.exe`, и рядом `SHA256SUMS`. Переименуйте в `itmo-widgets-agent`, положите в `PATH` и
+подключите. Например, macOS на Apple Silicon:
 
 ```sh
+shasum -a 256 --ignore-missing -c SHA256SUMS    # на Linux: sha256sum
+install -m 755 itmo-widgets-agent-darwin-arm64 /usr/local/bin/itmo-widgets-agent
+xattr -d com.apple.quarantine /usr/local/bin/itmo-widgets-agent   # если скачали браузером: бинарник не подписан
 itmo-widgets-agent pair
 itmo-widgets-agent run
 ```
