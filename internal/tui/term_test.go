@@ -12,10 +12,10 @@ func TestRingKeepsTheLastLines(t *testing.T) {
 		fmt.Fprintf(r, "line %d\n", i)
 	}
 	fmt.Fprint(r, "a\nb\n")
-	if got := r.last(3); !slices.Equal(got, []string{fmt.Sprintf("line %d", ringSize+4), "a", "b"}) {
+	if got := r.Last(3); !slices.Equal(got, []string{fmt.Sprintf("line %d", ringSize+4), "a", "b"}) {
 		t.Fatalf("last 3 = %q", got)
 	}
-	if n := len(r.last(100)); n != ringSize {
+	if n := len(r.Last(100)); n != ringSize {
 		t.Fatalf("kept %d lines", n)
 	}
 }

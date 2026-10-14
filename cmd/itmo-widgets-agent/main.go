@@ -17,6 +17,7 @@ import (
 
 	"github.com/alllexey-dev/itmo-widgets-agent/internal/agent"
 	"github.com/alllexey-dev/itmo-widgets-agent/internal/config"
+	"github.com/alllexey-dev/itmo-widgets-agent/internal/control"
 	"github.com/alllexey-dev/itmo-widgets-agent/internal/pair"
 	"github.com/alllexey-dev/itmo-widgets-agent/internal/redact"
 	"github.com/alllexey-dev/itmo-widgets-agent/internal/tui"
@@ -33,6 +34,8 @@ const usage = `itmo-widgets-agent %s
   itmo-widgets-agent pair --session выдать агенту новую сессию ИТМО
   itmo-widgets-agent login          запасной вход: refresh-токен ITMO.ID из stdin
   itmo-widgets-agent status         показать состояние
+  itmo-widgets-agent attach         экран запущенного агента (службы); q - закрыть, агент продолжит работу.
+                                    То же: watch
   itmo-widgets-agent unpair         отключить агент: отозвать токен на сервере, удалить токен и сессию ИТМО
   itmo-widgets-agent health         код выхода 0, если агент работает
   itmo-widgets-agent version        показать версию (или --version)
@@ -71,7 +74,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	err := fs.Parse(args)
 	switch {
 	case err != nil:
-	case !slices.Contains([]string{"run", "pair", "login", "status", "unpair", "health"}, cmd):
+	case !slices.Contains([]string{"run", "pair", "login", "status", "attach", "watch", "unpair", "health"}, cmd):
 		err = fmt.Errorf("неизвестная команда %q", cmd)
 	case fs.NArg() > 0 || (*sessionOnly && cmd != "pair") || (*uiFlag != "" && cmd != "run" && cmd != "pair"):
 		err = errors.New("лишние аргументы")
@@ -90,23 +93,27 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "настройки:", err)
 		return 2
 	}
-	screen := (cmd == "run" || cmd == "pair") && (cfg.UI == "tui" || cfg.UI == "auto" && tui.IsTerminal())
+	attach := cmd == "attach" || cmd == "watch"
+	screen := attach || (cmd == "run" || cmd == "pair") && (cfg.UI == "tui" || cfg.UI == "auto" && tui.IsTerminal())
 	ring := &tui.Ring{}
-	logOut := stderr
+	jsonOut := stderr
 	if screen {
-		logOut = ring
+		jsonOut = nil
 	}
-	log := newLogger(logOut, screen, cfg.LogLevel)
+	log := newLogger(jsonOut, ring, cfg.LogLevel)
 	a := agent.Build(cfg, version, log, time.Now)
-	app := &tui.App{Cfg: cfg, Version: version, Log: log, Ring: ring, Now: time.Now}
+	loop := &agent.Loop{Agent: a, Version: version, Name: cfg.Name, Lines: func() []string { return ring.Last(10) }}
+	app := &tui.App{Cfg: cfg, Version: version, Log: log, Now: time.Now}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	switch {
 	case cmd == "run" && screen:
-		err = app.Run(ctx, a)
+		err = serveAndRun(ctx, cfg.StateDir, loop, log, func() error { return app.Run(ctx, loop) })
 	case cmd == "run":
-		err = a.Run(ctx)
+		err = serveAndRun(ctx, cfg.StateDir, loop, log, func() error { return loop.Run(ctx) })
+	case attach:
+		err = attachTo(ctx, cfg.StateDir, app)
 	case cmd == "pair" && screen:
 		var isu int64
 		if isu, err = app.Pair(ctx, *sessionOnly); err == nil {
@@ -117,7 +124,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	case cmd == "login":
 		err = a.PairFlow(cfg.Name, version, pair.Text{W: stdout}).Login(ctx, stdin)
 	case cmd == "status":
-		err = agent.Status(a.Files, time.Now(), stdout)
+		err = agent.Status(a.Files, snapshot(cfg.StateDir), time.Now(), stdout)
 	case cmd == "unpair":
 		var u agent.Unpaired
 		if u, err = a.Unpair(ctx); err == nil {
@@ -145,17 +152,64 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 }
 
-// newLogger writes JSON lines, or short text lines for the screen's log panel; both mask tokens.
-func newLogger(w io.Writer, text bool, level slog.Level) *slog.Logger {
-	opts := &slog.HandlerOptions{Level: level, ReplaceAttr: redact.Attr}
-	if !text {
-		return slog.New(slog.NewJSONHandler(w, opts))
+// serveAndRun runs the agent with the control socket for attach and status; the socket goes away when it returns.
+func serveAndRun(ctx context.Context, dir string, loop *agent.Loop, log *slog.Logger, run func() error) error {
+	ln, err := control.Listen(dir)
+	switch {
+	case errors.Is(err, control.ErrRunning):
+		return err
+	case err != nil:
+		log.Warn("control socket unavailable: attach and live status are off", "err", err)
+	default:
+		defer ln.Close()
+		go control.Serve(ctx, ln, loop, log)
 	}
-	opts.ReplaceAttr = func(groups []string, a slog.Attr) slog.Attr {
+	return run()
+}
+
+func attachTo(ctx context.Context, dir string, app *tui.App) error {
+	c, err := control.Dial(dir)
+	if err != nil {
+		return fmt.Errorf("агент не запущен: никто не отвечает на %s.\n"+
+			"Последнее сохранённое состояние: itmo-widgets-agent status\n"+
+			"Запустить: включите службу в установщике или выполните itmo-widgets-agent run", control.Path(dir))
+	}
+	defer c.Close()
+	live, err := c.Snapshot()
+	if err != nil {
+		return err
+	}
+	if !tui.IsTerminal() {
+		return errors.New("для attach нужен терминал (в Docker: docker compose exec, без -T); без него: itmo-widgets-agent status")
+	}
+	return app.Attach(ctx, c, live)
+}
+
+// snapshot is the running agent's state, nil when none answers.
+func snapshot(dir string) *agent.Live {
+	c, err := control.Dial(dir)
+	if err != nil {
+		return nil
+	}
+	defer c.Close()
+	if live, err := c.Snapshot(); err == nil {
+		return &live
+	}
+	return nil
+}
+
+// newLogger writes JSON lines to jsonOut (none when nil) and short text lines into ring, which the screen, attach and
+// status show; both mask tokens.
+func newLogger(jsonOut io.Writer, ring io.Writer, level slog.Level) *slog.Logger {
+	opts := &slog.HandlerOptions{Level: level, ReplaceAttr: redact.Attr}
+	short := slog.NewTextHandler(ring, &slog.HandlerOptions{Level: level, ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
 		if a.Key == slog.TimeKey && len(groups) == 0 {
 			return slog.String(a.Key, a.Value.Time().Format("15:04:05"))
 		}
 		return redact.Attr(groups, a)
+	}})
+	if jsonOut == nil {
+		return slog.New(short)
 	}
-	return slog.New(slog.NewTextHandler(w, opts))
+	return slog.New(slog.NewMultiHandler(slog.NewJSONHandler(jsonOut, opts), short))
 }

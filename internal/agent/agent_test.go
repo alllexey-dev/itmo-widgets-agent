@@ -329,7 +329,7 @@ func TestLogsNeverContainTokens(t *testing.T) {
 		t.Fatal(err)
 	}
 	var status strings.Builder
-	Status(h.a.Files, fake.Now, &status)
+	Status(h.a.Files, nil, fake.Now, &status)
 	logs := h.logs.String() + status.String()
 	if signIns, refreshes := h.f.Snapshot(); len(signIns) != 1 || refreshes != 1 {
 		t.Fatalf("scenario did not book with a refresh: %v %d", signIns, refreshes)
@@ -355,7 +355,7 @@ func TestStatusShowsHistory(t *testing.T) {
 	st.AddSport(state.SportAttempt{At: fake.Now, Queue: "auto", LessonID: 9001, Start: fake.Now, Outcome: "NO_CAPACITY"})
 	files.SaveState(st)
 	var out strings.Builder
-	if err := Status(files, fake.Now, &out); err != nil {
+	if err := Status(files, nil, fake.Now, &out); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"на связи", "ISU 100001", "действует до", "автозапись", "занятие 9001", "мест нет"} {
@@ -365,5 +365,19 @@ func TestStatusShowsHistory(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "SECRET") || strings.Contains(out.String(), fake.AgentToken) {
 		t.Fatalf("status prints a secret:\n%s", out.String())
+	}
+}
+
+func TestStatusPrefersTheRunningAgent(t *testing.T) {
+	files := state.Files{Dir: t.TempDir()}
+	live := &Live{Report: Report{HasToken: true, Cursor: 42}, Running: true, Started: fake.Now, Log: []string{"msg=\"agent started\""}}
+	var out strings.Builder
+	if err := Status(files, live, fake.Now, &out); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Запущен: да", "attach", "Курсор событий: 42", "Журнал:", "agent started"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("status lacks %q:\n%s", want, out.String())
+		}
 	}
 }
