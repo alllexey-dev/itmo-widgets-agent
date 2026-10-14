@@ -54,8 +54,8 @@ func (a *App) Run(ctx context.Context, ag *agent.Agent) (err error) {
 				return err
 			}
 		}
-		if again := a.status(ctx, ag); !again {
-			return nil
+		if again, err := a.status(ctx, ag); !again {
+			return err
 		}
 	}
 	return nil
@@ -204,8 +204,9 @@ func (a *App) pairFrame(v *pairView, sessionOnly bool, failed error, frame int) 
 	return b.String()
 }
 
-// status runs the agent under the status screen. It returns true to go back to pairing, false to quit.
-func (a *App) status(ctx context.Context, ag *agent.Agent) bool {
+// status runs the agent under the status screen. It returns true to go back to pairing, false to quit; after a 401 it
+// stays on an «отключено» screen and quitting returns agent.ErrTokenRevoked (exit code 3).
+func (a *App) status(ctx context.Context, ag *agent.Agent) (bool, error) {
 	loopCtx, stop := context.WithCancel(ctx)
 	defer stop()
 	started := a.Now()
@@ -219,6 +220,12 @@ func (a *App) status(ctx context.Context, ag *agent.Agent) bool {
 			loopErr, running = <-done, false
 		}
 	}
+	revoked := func() error {
+		if errors.Is(loopErr, agent.ErrTokenRevoked) {
+			return loopErr
+		}
+		return nil
+	}
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
 	for {
@@ -226,19 +233,23 @@ func (a *App) status(ctx context.Context, ag *agent.Agent) bool {
 		select {
 		case <-ctx.Done():
 			halt()
-			return false
+			return false, revoked()
 		case loopErr = <-done:
 			running = false
-			if errors.Is(loopErr, agent.ErrTokenRevoked) {
-				a.notice = "Агент отключён в приложении: токен и сессия ИТМО удалены."
-				return true
+			if revoked() != nil {
+				a.notice = "Агент отключён на сервере: токен и сессия ИТМО удалены с этой машины."
 			}
 		case <-tick.C:
 		case k := <-a.scr.keys:
+			gone := revoked() != nil
 			switch {
 			case k == 'q':
 				halt()
-				return false
+				return false, revoked()
+			case gone && k == 'p':
+				a.notice = ""
+				return true, nil
+			case gone:
 			case k == 's' && !confirm:
 				a.notice = ""
 				if _, err := a.pair(ctx, true); err == nil {
@@ -248,14 +259,15 @@ func (a *App) status(ctx context.Context, ag *agent.Agent) bool {
 				confirm = true
 			case k == 'y' && confirm:
 				halt()
-				if err := ag.Files.Wipe(); err != nil {
+				a.notice, confirm = "Отключаем агент на сервере…", false
+				a.scr.draw(a.statusFrame(ag.Files, started, running, loopErr, confirm))
+				u, err := ag.Unpair(ctx)
+				if err != nil {
 					a.notice = "Не удалось удалить файлы: " + err.Error()
-					confirm = false
 					continue
 				}
-				a.notice = "Токен и сессия удалены с этой машины. Удалите устройство и в приложении: " +
-					"Профиль -> «Подключённые устройства»."
-				return true
+				a.notice = u.Message()
+				return true, nil
 			default:
 				confirm = false
 			}
@@ -277,6 +289,8 @@ func (a *App) statusFrame(files state.Files, started time.Time, running bool, lo
 	}
 	conn := green("● на связи")
 	switch {
+	case errors.Is(loopErr, agent.ErrTokenRevoked):
+		conn = red("● отключено") + dim(": сервер отозвал токен агента")
 	case !running && loopErr != nil:
 		conn = red("● остановлен: " + loopErr.Error())
 	case !running:
@@ -334,9 +348,13 @@ func (a *App) statusFrame(files state.Files, started time.Time, running bool, lo
 		}
 	}
 	b.WriteString("\n")
-	if confirm {
-		b.WriteString(yellow("Отключить агент на этой машине? Токен и сессия ИТМО будут удалены.") + "\n" + dim("[y] да   любая клавиша - нет"))
-	} else {
+	switch {
+	case errors.Is(loopErr, agent.ErrTokenRevoked):
+		b.WriteString(dim("[p] подключить заново   [q] выйти"))
+	case confirm:
+		b.WriteString(yellow("Отключить агент? Сервер отзовёт токен, токен и сессия ИТМО будут удалены с этой машины.") + "\n" +
+			dim("[y] да   любая клавиша - нет"))
+	default:
 		b.WriteString(dim("[s] новая сессия ИТМО   [u] отключить   [q] выйти"))
 	}
 	return b.String()

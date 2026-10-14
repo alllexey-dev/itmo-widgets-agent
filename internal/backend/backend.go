@@ -67,6 +67,11 @@ func (c *Client) Me(ctx context.Context) (Identity, error) {
 	return out, c.do(ctx, http.MethodGet, "/api/agent/me", 0, nil, &out)
 }
 
+// RevokeSelf sends DELETE /api/agent/self: Backend revokes the calling token, as removing the device in the app does.
+func (c *Client) RevokeSelf(ctx context.Context) error {
+	return c.do(ctx, http.MethodDelete, "/api/agent/self", 0, nil, nil)
+}
+
 type Event struct {
 	Seq        int64           `json:"seq"`
 	ID         string          `json:"id"`

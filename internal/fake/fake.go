@@ -64,6 +64,10 @@ type Backend struct {
 	Reports      []string
 	Syncs        [][]int64
 	Created      []map[string]string
+	// SelfStatus, SelfCode answer DELETE /api/agent/self when set; otherwise the token is revoked and later calls get 401.
+	SelfStatus  int
+	SelfCode    string
+	SelfRevokes int
 	// Poll answers GET /api/pair/challenges/{id}; n counts polls from 1.
 	Poll  func(n int) (int, string)
 	polls int
@@ -127,6 +131,14 @@ func (b *Backend) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		data, _ := json.Marshal(resp.Page)
 		ok(w, string(data))
+	case p == "/api/agent/self" && r.Method == http.MethodDelete:
+		if b.SelfStatus != 0 {
+			fail(w, b.SelfStatus, b.SelfCode)
+			return
+		}
+		b.SelfRevokes++
+		b.Token = ""
+		ok(w, `{}`)
 	case p == "/api/agent/me":
 		ok(w, fmt.Sprintf(`{"isu":%d,"tokenId":"t1","name":"nas","scopes":["sport"]}`, b.Isu))
 	case len(parts) == 5 && parts[1] == "sport" && parts[3] == "entry" && parts[4] == "my":

@@ -38,7 +38,7 @@ clock is injected.
 | Path | What |
 |---|---|
 | `cmd/itmo-widgets-agent` | CLI: `run`, `pair [--session]`, `login`, `status`, `unpair`, `health`, `--ui`; exit codes |
-| `internal/agent` | the poll loop: cursor, dedup ids, backoff, 401 wipe, ITMO session state, health and status |
+| `internal/agent` | the poll loop: cursor, dedup ids, backoff, 401 wipe, waiting for a token, ITMO session state, `unpair`, health and status |
 | `internal/backend` | Backend client for the routes an agent token may call |
 | `internal/itmo` | minimal ITMO.ID and My ITMO client (see below) |
 | `internal/sport` | booking on `SPORT_*_SIGN_LESSONS_PAYLOAD` events |
