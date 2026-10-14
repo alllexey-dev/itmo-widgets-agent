@@ -49,7 +49,8 @@ clock is injected.
 | `internal/config` | environment and `agent.env` |
 | `internal/tui` | the terminal screen: pairing and status, plain ANSI over `golang.org/x/term` |
 | `internal/redact` | masks token-like strings in every log line |
-| `deploy/` | launchd and systemd examples |
+| `deploy/` | launchd and systemd examples; `install.sh` fetches them from the release tag and fills in the paths |
+| `install.sh`, `install.ps1` | one-command installers with a menu; `scripts/install-test.*` run them in CI against a fake release (`IW_RELEASE_BASE`) |
 
 ## The terminal screen
 
