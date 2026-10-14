@@ -8,6 +8,14 @@ sport lessons with the user's own My ITMO session. Keep it small: idle RSS under
 Go 1.26 or newer (`crypto/hpke`).
 
 ```sh
+make            # gofmt, go vet, go test -race, govulncheck, build: what CI runs
+make cross      # binaries for every release target into dist/
+make image      # the Docker image
+```
+
+Without make:
+
+```sh
 go vet ./...
 go test -race ./...
 go build -trimpath -ldflags "-s -w -X main.version=dev" ./cmd/itmo-widgets-agent
@@ -29,7 +37,7 @@ clock is injected.
 
 | Path | What |
 |---|---|
-| `cmd/itmo-widgets-agent` | CLI: `run`, `pair [--session]`, `login`, `status`, `health`; exit codes |
+| `cmd/itmo-widgets-agent` | CLI: `run`, `pair [--session]`, `login`, `status`, `unpair`, `health`, `--ui`; exit codes |
 | `internal/agent` | the poll loop: cursor, dedup ids, backoff, 401 wipe, ITMO session state, health and status |
 | `internal/backend` | Backend client for the routes an agent token may call |
 | `internal/itmo` | minimal ITMO.ID and My ITMO client (see below) |
@@ -39,7 +47,19 @@ clock is injected.
 | `internal/budget` | per-host request ceiling in the HTTP transport (60 per hour to ITMO) |
 | `internal/notify` | ntfy notifications |
 | `internal/config` | environment and `agent.env` |
+| `internal/tui` | the terminal screen: pairing and status, plain ANSI over `golang.org/x/term` |
+| `internal/redact` | masks token-like strings in every log line |
 | `deploy/` | launchd and systemd examples |
+
+## The terminal screen
+
+`run` and `pair` draw a screen when stdin and stdout are a terminal (`IW_UI` or `--ui` force `tui` or `plain`).
+It is plain ANSI with `golang.org/x/term` for raw mode, not Bubble Tea: measured on 2026-10-14 (linux/arm64,
+stripped), Bubble Tea v2 with Lip Gloss v2 added 1.5 MB to the binary, 15 modules and 5.6 MB of idle RSS
+(10.4 MB vs 4.8 MB for the same screen), while x/term adds about 0.1 MB. The screen reads `state.json` and
+`session.json` once a second, so it shows the same thing whether the poll loop runs in the process or not; logs go
+to an in-memory ring shown at the bottom. Screen captures in `docs/screens/` are plain text; refresh them by hand
+when the layout changes.
 
 ## Contracts
 

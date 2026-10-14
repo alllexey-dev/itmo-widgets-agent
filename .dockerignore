@@ -4,3 +4,5 @@ dist
 data
 *.md
 !README.md
+docs
+Makefile
