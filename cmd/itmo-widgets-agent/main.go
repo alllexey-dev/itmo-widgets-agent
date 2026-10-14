@@ -33,7 +33,7 @@ const usage = `itmo-widgets-agent %s
   itmo-widgets-agent pair --session выдать агенту новую сессию ИТМО
   itmo-widgets-agent login          запасной вход: refresh-токен ITMO.ID из stdin
   itmo-widgets-agent status         показать состояние
-  itmo-widgets-agent unpair         удалить токен агента и сессию ИТМО с этой машины
+  itmo-widgets-agent unpair         отключить агент: отозвать токен на сервере, удалить токен и сессию ИТМО
   itmo-widgets-agent health         код выхода 0, если агент работает
   itmo-widgets-agent version        показать версию (или --version)
 
@@ -119,9 +119,13 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	case cmd == "status":
 		err = agent.Status(a.Files, time.Now(), stdout)
 	case cmd == "unpair":
-		if err = a.Files.Wipe(); err == nil {
-			fmt.Fprintln(stdout, "Токен агента и сессия ИТМО удалены с этой машины. Чтобы закрыть агенту доступ к серверу, "+
-				"удалите его в приложении: Профиль -> «Подключённые устройства».")
+		var u agent.Unpaired
+		if u, err = a.Unpair(ctx); err == nil {
+			out := stdout
+			if u.Err != nil {
+				out = stderr
+			}
+			fmt.Fprintln(out, u.Message())
 		}
 	case cmd == "health":
 		err = agent.Health(a.Files, time.Now())

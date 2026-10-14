@@ -10,6 +10,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"net/url"
+	"os"
 	"time"
 
 	"github.com/alllexey-dev/itmo-widgets-agent/internal/backend"
@@ -30,6 +31,7 @@ const (
 	rateLimitPause = time.Minute
 	accessOffPause = time.Hour
 	healthyPoll    = 2 * time.Minute
+	tokenWait      = 10 * time.Second
 )
 
 // ErrTokenRevoked: Backend answered 401, the token and the session were wiped (exit code 3).
@@ -94,11 +96,11 @@ func (a *Agent) PairFlow(name, version string, view pair.View) *pair.Flow {
 	}
 }
 
-// Run polls until ctx ends or the token is revoked.
+// Run polls until ctx ends or the token is revoked. Without a token it waits for one.
 func (a *Agent) Run(ctx context.Context) error {
-	token, err := a.Files.Token()
-	if err != nil {
-		return fmt.Errorf("нет токена агента, сначала выполните pair: %w", err)
+	token, err := a.waitToken(ctx)
+	if err != nil || token == "" {
+		return err
 	}
 	a.Backend = a.Backend.WithToken(token)
 	a.Sport.Backend = a.Backend
@@ -150,6 +152,26 @@ func (a *Agent) Run(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// waitToken returns the token, waiting for `pair` to write one: under Docker or launchd an exit would only restart the
+// agent into the same state over and over. "" when ctx ends first.
+func (a *Agent) waitToken(ctx context.Context) (string, error) {
+	for logged := false; ; logged = true {
+		token, err := a.Files.Token()
+		if err == nil {
+			return token, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("токен агента не читается: %w", err)
+		}
+		if !logged {
+			a.Log.Warn("no agent token; waiting for pair to write one", "path", a.Files.TokenPath)
+		}
+		if a.Sleep(ctx, tokenWait) != nil {
+			return "", nil
+		}
+	}
 }
 
 // pollFailed decides the pause after a failed poll, or stops the agent on 401.
