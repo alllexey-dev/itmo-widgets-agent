@@ -12,8 +12,12 @@ import (
 	"time"
 )
 
-// MaxSeen is how many handled event ids the agent remembers.
-const MaxSeen = 1000
+const (
+	// MaxSeen is how many handled event ids the agent remembers.
+	MaxSeen = 1000
+	// MaxHistory is how many recent events and sport attempts status shows.
+	MaxHistory = 10
+)
 
 type Files struct {
 	Dir       string
@@ -46,15 +50,38 @@ type State struct {
 	LastError  string    `json:"lastError,omitempty"`
 	// SessionClosedMtime is the session file's mtime (Unix ns) when ITMO closed that session; 0 when open.
 	SessionClosedMtime int64 `json:"sessionClosedMtime,omitempty"`
+	// Events and Sport are the recent history for status, oldest first; no names or lesson titles.
+	Events []EventRecord  `json:"events,omitempty"`
+	Sport  []SportAttempt `json:"sport,omitempty"`
 }
+
+type EventRecord struct {
+	At   time.Time `json:"at"`
+	Seq  int64     `json:"seq"`
+	Type string    `json:"type"`
+}
+
+// SportAttempt is one booking decision; Outcome is SIGNED_IN, ALREADY_BOOKED, NO_CAPACITY, REJECTED or RETRY_LATER.
+type SportAttempt struct {
+	At       time.Time `json:"at"`
+	Queue    string    `json:"queue"`
+	LessonID int64     `json:"lessonId"`
+	Start    time.Time `json:"start"`
+	Outcome  string    `json:"outcome"`
+}
+
+func (s *State) AddEvent(e EventRecord)  { s.Events = keepLast(append(s.Events, e), MaxHistory) }
+func (s *State) AddSport(a SportAttempt) { s.Sport = keepLast(append(s.Sport, a), MaxHistory) }
 
 func (s *State) HasSeen(id string) bool { return slices.Contains(s.Seen, id) }
 
-func (s *State) MarkSeen(id string) {
-	s.Seen = append(s.Seen, id)
-	if over := len(s.Seen) - MaxSeen; over > 0 {
-		s.Seen = slices.Delete(s.Seen, 0, over)
+func (s *State) MarkSeen(id string) { s.Seen = keepLast(append(s.Seen, id), MaxSeen) }
+
+func keepLast[T any](xs []T, n int) []T {
+	if over := len(xs) - n; over > 0 {
+		return slices.Delete(xs, 0, over)
 	}
+	return xs
 }
 
 // WriteAtomic writes through a temporary file and a rename, so readers never see half a file.

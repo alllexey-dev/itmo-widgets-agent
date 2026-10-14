@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -29,6 +30,9 @@ type Config struct {
 	NtfyURL    string
 	Name       string
 	Features   map[string]bool
+	// UI is "auto" (a screen on a terminal, plain logs otherwise), "tui" or "plain".
+	UI       string
+	LogLevel slog.Level
 }
 
 // Load reads the settings. getenv is os.Getenv in production; values from the environment win over
@@ -72,6 +76,12 @@ func Load(getenv func(string) string) (Config, error) {
 	}
 	if cfg.Features, err = parseFeatures(get("IW_FEATURES", "sport,friends")); err != nil {
 		return Config{}, err
+	}
+	if cfg.UI, err = ParseUI(get("IW_UI", "auto")); err != nil {
+		return Config{}, err
+	}
+	if err := cfg.LogLevel.UnmarshalText([]byte(get("IW_LOG_LEVEL", "info"))); err != nil {
+		return Config{}, errors.New("IW_LOG_LEVEL must be debug, info, warn or error")
 	}
 	return cfg, nil
 }
@@ -119,6 +129,15 @@ func parseFile(r io.Reader) (map[string]string, error) {
 		out[key] = value
 	}
 	return out, sc.Err()
+}
+
+// ParseUI checks IW_UI and the --ui flag.
+func ParseUI(s string) (string, error) {
+	switch s = strings.ToLower(strings.TrimSpace(s)); s {
+	case "auto", "tui", "plain":
+		return s, nil
+	}
+	return "", fmt.Errorf("IW_UI and --ui must be auto, tui or plain, not %q", s)
 }
 
 func parseFeatures(s string) (map[string]bool, error) {
