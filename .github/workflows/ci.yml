@@ -24,7 +24,7 @@ jobs:
         run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
       - name: Cross-build
         run: |
-          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 freebsd/amd64 freebsd/arm64 windows/amd64; do
             os=${target%/*}; arch=${target#*/}
             CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath -ldflags "-s -w" \
               -o "dist/itmo-widgets-agent-$os-$arch" ./cmd/itmo-widgets-agent
@@ -48,12 +48,13 @@ jobs:
           go-version: stable
       - name: shellcheck
         if: runner.os == 'Linux'
-        run: shellcheck install.sh scripts/install-test.sh
+        run: shellcheck install.sh scripts/install-test.sh deploy/itmo_widgets_agent.rc
       - name: Fake release
         run: |
           v=v0.0.0-ci; mkdir -p fake/$v fake/bad
           CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${v#v}" \
             -o "fake/$v/itmo-widgets-agent-$(go env GOOS)-$(go env GOARCH)" ./cmd/itmo-widgets-agent
+          cp -R deploy fake/$v/
           (cd fake/$v && shasum -a 256 itmo-widgets-agent-* > SHA256SUMS)
           cp fake/$v/itmo-widgets-agent-* fake/bad/
           awk '{ print "0000000000000000000000000000000000000000000000000000000000000000  " $2 }' fake/$v/SHA256SUMS > fake/bad/SHA256SUMS
@@ -121,3 +122,66 @@ jobs:
           Start-Process python -ArgumentList '-m', 'http.server', '8765', '--bind', '127.0.0.1', '--directory', 'fake' -WindowStyle Hidden
           Start-Sleep 2
           ./scripts/install-test.ps1 -Installer ./install.ps1 -V v0.0.0-ci
+
+  freebsd:
+    # Tests and the installer on a FreeBSD VM. Go there lags behind, so the test binaries are cross-built here.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: Test binaries and a fake release
+        run: |
+          mkdir -p tests
+          for p in $(go list -f '{{if .TestGoFiles}}{{.Dir}}{{end}}' ./...); do
+            rel=${p#"$PWD/"}
+            CGO_ENABLED=0 GOOS=freebsd GOARCH=amd64 go test -c -o "tests/$(echo "$rel" | tr / _).test" "./$rel"
+          done
+          v=v0.0.0-ci; mkdir -p fake/$v fake/bad
+          CGO_ENABLED=0 GOOS=freebsd GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.version=${v#v}" \
+            -o fake/$v/itmo-widgets-agent-freebsd-amd64 ./cmd/itmo-widgets-agent
+          cp -R deploy fake/$v/
+          (cd fake/$v && sha256sum itmo-widgets-agent-* > SHA256SUMS)
+          cp fake/$v/itmo-widgets-agent-* fake/bad/
+          awk '{ print "0000000000000000000000000000000000000000000000000000000000000000  " $2 }' fake/$v/SHA256SUMS > fake/bad/SHA256SUMS
+      - uses: vmactions/freebsd-vm@v1
+        with:
+          usesh: true
+          run: |
+            set -ex
+            uname -a
+            for t in tests/*.test; do
+              dir=$(basename "$t" .test | tr _ /)
+              (cd "$dir" && "$OLDPWD/$t")
+            done
+            export IW_RELEASE_BASE="file://$PWD/fake"
+            sh scripts/install-test.sh "$PWD/install.sh" v0.0.0-ci
+
+            # The rc.d service for a normal user without sudo: the installer prints the root commands, root runs them.
+            pw useradd agent -m -s /bin/sh
+            su -l agent -c "mkdir -p .config/itmo-widgets-agent && echo iwa_test_fixture > .config/itmo-widgets-agent/agent-token &&
+              echo IW_BACKEND_URL=http://127.0.0.1:9 > .config/itmo-widgets-agent/agent.env &&
+              IW_RELEASE_BASE=$IW_RELEASE_BASE sh $PWD/install.sh --version v0.0.0-ci" > out.txt
+            cat out.txt
+            sed -n '/Выполните сами/,$p' out.txt | tail -n +2 > root.sh
+            sh -e root.sh
+            sleep 3
+            service itmo_widgets_agent status
+            pgrep -U agent -f 'itmo-widgets-agent run'
+            su -l agent -c "IW_RELEASE_BASE=$IW_RELEASE_BASE sh $PWD/install.sh --status --version v0.0.0-ci" | grep 'Служба:  работает'
+            cat /var/log/itmo_widgets_agent.log
+            service itmo_widgets_agent stop
+            sysrc -x itmo_widgets_agent_enable itmo_widgets_agent_user itmo_widgets_agent_program
+            rm -f /usr/local/etc/rc.d/itmo_widgets_agent /var/log/itmo_widgets_agent.log
+
+            # As root the installer runs the same commands itself; uninstall removes them.
+            mkdir -p /root/.config/itmo-widgets-agent
+            echo iwa_test_fixture > /root/.config/itmo-widgets-agent/agent-token
+            echo IW_BACKEND_URL=http://127.0.0.1:9 > /root/.config/itmo-widgets-agent/agent.env
+            sh install.sh --version v0.0.0-ci
+            sleep 3
+            sh install.sh --status --version v0.0.0-ci | grep 'Служба:  работает'
+            sh install.sh --uninstall --yes
+            [ ! -e /usr/local/etc/rc.d/itmo_widgets_agent ] && [ ! -e /root/.local/bin/itmo-widgets-agent ]
+            ! sysrc -n itmo_widgets_agent_enable

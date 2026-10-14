@@ -1,7 +1,8 @@
 #!/bin/sh
 # shellcheck disable=SC2015 # "a && b || die" is meant: die when either fails.
-# ITMO.Widgets agent installer for Linux and macOS, for the current user, no sudo:
+# ITMO.Widgets agent installer for Linux, macOS and FreeBSD, for the current user (root only for the FreeBSD service):
 #   curl -fsSL https://raw.githubusercontent.com/alllexey-dev/itmo-widgets-agent/main/install.sh | sh
+#   fetch -qo - https://raw.githubusercontent.com/alllexey-dev/itmo-widgets-agent/main/install.sh | sh   # FreeBSD
 # On a terminal with no flags it shows the state and a menu. Without a terminal it installs and starts the service.
 # Flags (curl ... | sh -s -- FLAGS): --install, --pair, --service on|off|restart, --status, --unpair, --uninstall,
 # --no-service, --version vX.Y.Z (or IW_VERSION), --yes. A re-run of --install upgrades in place.
@@ -16,8 +17,14 @@ BIN="$BIN_DIR/$NAME"
 UNIT="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$NAME.service"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 MAC_LOG="$HOME/Library/Logs/$NAME.log"
-# Test-only: a local server with the release assets instead of GitHub.
+RC_NAME=itmo_widgets_agent
+RC="/usr/local/etc/rc.d/$RC_NAME"
+BSD_LOG="/var/log/$RC_NAME.log"
+# Test-only: a local server with VERSION/<release assets> and VERSION/deploy/ instead of GitHub.
 RELEASE_BASE="${IW_RELEASE_BASE:-https://github.com/$REPO/releases/download}"
+DEPLOY_BASE="${IW_RELEASE_BASE:-https://raw.githubusercontent.com/$REPO}"
+# Test-only: a file with the answers instead of the terminal.
+TTY="${IW_TTY:-/dev/tty}"
 
 usage="Флаги: --install, --pair, --service on|off|restart, --status, --unpair, --uninstall, --no-service, --version X, --yes"
 version="${IW_VERSION:-}"
@@ -40,7 +47,7 @@ while [ $# -gt 0 ]; do
 done
 
 tty=0
-(: </dev/tty) 2>/dev/null && tty=1
+(: <"$TTY") 2>/dev/null && tty=1
 if [ "$tty" = 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != dumb ] && [ -t 1 ]; then
 	B=$(printf '\033[1m') G=$(printf '\033[32m') R=$(printf '\033[31m') Y=$(printf '\033[33m') N=$(printf '\033[0m')
 else
@@ -53,14 +60,18 @@ die() { printf '%sОшибка: %s%s\n' "$R" "$*" "$N" >&2; exit 1; }
 case "$(uname -s)" in
 Linux) os=linux ;;
 Darwin) os=darwin ;;
-*) die "поддерживаются Linux и macOS; для Windows есть install.ps1" ;;
+FreeBSD) os=freebsd ;;
+*) die "поддерживаются Linux, macOS и FreeBSD; для Windows есть install.ps1" ;;
 esac
 case "$(uname -m)" in
 x86_64 | amd64) arch=amd64 ;;
 aarch64 | arm64) arch=arm64 ;;
 *) die "архитектура $(uname -m) не поддерживается: есть amd64 и arm64" ;;
 esac
-command -v curl >/dev/null || die "нужен curl"
+command -v curl >/dev/null || command -v fetch >/dev/null || die "нужен curl"
+
+# get URL FILE downloads with curl, or with fetch(1) from the FreeBSD base system.
+get() { if command -v curl >/dev/null; then curl -fsSL -o "$2" "$1"; else fetch -qo "$2" "$1"; fi; }
 
 tmp=$(mktemp -d) || die "не удалось создать временную папку"
 trap 'rm -rf "$tmp"' EXIT
@@ -71,24 +82,32 @@ paired() { [ -x "$BIN" ] && "$BIN" status 2>/dev/null | grep -q '^Токен а�
 
 # service_state prints none, running or stopped.
 service_state() {
-	if [ "$os" = darwin ]; then
+	case "$os" in
+	darwin)
 		[ -f "$PLIST" ] || { echo none; return; }
-		launchctl print "gui/$(id -u)/$LABEL" 2>/dev/null | grep -q 'state = running' && echo running || echo stopped
-	else
+		launchctl print "gui/$(id -u)/$LABEL" 2>/dev/null | grep -q 'state = running' && echo running || echo stopped ;;
+	freebsd)
+		[ -f "$RC" ] || { echo none; return; }
+		pgrep -f "$BIN run" >/dev/null && echo running || echo stopped ;;
+	*)
 		[ -f "$UNIT" ] || { echo none; return; }
-		has_systemd && systemctl --user is-active --quiet "$NAME" && echo running || echo stopped
-	fi
+		has_systemd && systemctl --user is-active --quiet "$NAME" && echo running || echo stopped ;;
+	esac
 }
 
 # latest prints the pinned version or the newest release, prereleases included (/releases/latest skips them).
 latest() {
 	[ -n "$version" ] && { echo "$version"; return; }
-	code=$(curl -sSL -o "$tmp/releases.json" -w '%{http_code}' \
-		-H 'Accept: application/vnd.github+json' "https://api.github.com/repos/$REPO/releases?per_page=1") || code=000
+	api="https://api.github.com/repos/$REPO/releases?per_page=1"
+	if command -v curl >/dev/null; then
+		code=$(curl -sSL -o "$tmp/releases.json" -w '%{http_code}' -H 'Accept: application/vnd.github+json' "$api") || code=000
+	else
+		fetch -qo "$tmp/releases.json" "$api" 2>/dev/null && code=200 || code="ошибка fetch"
+	fi
 	if grep -q 'rate limit' "$tmp/releases.json" 2>/dev/null; then
 		die "GitHub API: лимит запросов без токена исчерпан (60 в час на IP). Повторите через час или укажите версию: --version v0.1.0"
 	fi
-	[ "$code" = 200 ] || die "GitHub API не ответил (HTTP $code). Укажите версию: --version v0.1.0"
+	[ "$code" = 200 ] || die "GitHub API не ответил ($code): нет сети или исчерпан лимит 60 запросов в час. Укажите версию: --version v0.1.0"
 	v=$(sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' "$tmp/releases.json" | head -n 1)
 	[ -n "$v" ] || die "на GitHub нет ни одного релиза"
 	echo "$v"
@@ -98,21 +117,55 @@ confirm() {
 	[ "$yes" = 1 ] && return 0
 	[ "$tty" = 1 ] || die "$1 Без терминала добавьте --yes"
 	printf '%s [y/N] ' "$1"
-	read -r answer </dev/tty || return 1
+	read -r answer <"$TTY" || return 1
 	case "$answer" in y | Y | д | Д | yes | да) return 0 ;; *) return 1 ;; esac
+}
+
+# ask_yes is a question that defaults to yes; it needs a terminal.
+ask_yes() {
+	printf '%s [Y/n] ' "$1"
+	read -r answer <"$TTY" || return 1
+	case "$answer" in n | N | н | Н | no | нет) return 1 ;; *) return 0 ;; esac
+}
+
+# as_root runs the commands (one per line) as root: directly, or through sudo or doas once the user agrees.
+# Otherwise it prints them for the user and fails.
+as_root() {
+	[ "$(id -u)" = 0 ] && { sh -ec "$1"; return; }
+	su=$(command -v sudo || command -v doas) || su=""
+	if [ -n "$su" ] && { [ "$yes" = 1 ] || [ "$tty" = 1 ]; } && say "Нужны права root, команды:" && say "$1" &&
+		confirm "Выполнить их через ${su##*/}?"; then
+		"$su" sh -ec "$1"
+		return
+	fi
+	warn "Нужны права root. Выполните сами (через sudo, doas или su -m root -c):"
+	say "$1"
+	return 1
+}
+
+# get_deploy FILE downloads deploy/FILE of the installed release (main for releases older than the file) to $tmp/service.
+get_deploy() {
+	v=$(installed) || die "агент не установлен"
+	case "$v" in v*) ;; *) v="v$v" ;; esac
+	deploy_url="$DEPLOY_BASE/$v/deploy/$1"
+	get "$deploy_url" "$tmp/service" 2>/dev/null && return
+	deploy_url="$DEPLOY_BASE/main/deploy/$1"
+	get "$deploy_url" "$tmp/service" || die "не удалось скачать deploy/$1"
 }
 
 install_binary() {
 	v=$(latest) || exit 1
 	asset="$NAME-$os-$arch"
 	say "Скачиваем $asset $v"
-	curl -fsSL -o "$tmp/$asset" "$RELEASE_BASE/$v/$asset" || die "не удалось скачать $RELEASE_BASE/$v/$asset"
-	curl -fsSL -o "$tmp/SHA256SUMS" "$RELEASE_BASE/$v/SHA256SUMS" || die "не удалось скачать SHA256SUMS"
+	get "$RELEASE_BASE/$v/$asset" "$tmp/$asset" || die "не удалось скачать $RELEASE_BASE/$v/$asset"
+	get "$RELEASE_BASE/$v/SHA256SUMS" "$tmp/SHA256SUMS" || die "не удалось скачать SHA256SUMS"
 	want=$(awk -v f="$asset" '$2 == f || $2 == "*" f { print $1 }' "$tmp/SHA256SUMS")
 	if command -v sha256sum >/dev/null; then
 		got=$(sha256sum "$tmp/$asset" | awk '{ print $1 }')
-	else
+	elif command -v shasum >/dev/null; then
 		got=$(shasum -a 256 "$tmp/$asset" | awk '{ print $1 }')
+	else
+		got=$(sha256 -q "$tmp/$asset")
 	fi
 	[ -n "$want" ] && [ "$want" = "$got" ] || die "контрольная сумма $asset не совпала с SHA256SUMS, файл не установлен"
 	chmod 755 "$tmp/$asset" && mkdir -p "$BIN_DIR" || die "не удалось создать $BIN_DIR"
@@ -129,13 +182,17 @@ do_pair() {
 	[ -x "$BIN" ] || die "агент не установлен"
 	[ "$tty" = 1 ] || { warn "Нет терминала для подключения. Выполните потом: $NAME pair"; return 0; }
 	# Under curl | sh stdin is the script, so the pairing screen reads the terminal directly.
-	"$BIN" pair </dev/tty || { warn "Подключение не закончено. Повторите: $NAME pair"; return 0; }
+	"$BIN" pair <"$TTY" || { warn "Подключение не закончено. Повторите: $NAME pair"; return 0; }
 }
 
 service_off() {
 	if [ "$os" = darwin ]; then
 		launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null
 		rm -f "$PLIST"
+	elif [ "$os" = freebsd ]; then
+		as_root "service $RC_NAME onestop || true
+sysrc -x ${RC_NAME}_enable ${RC_NAME}_user ${RC_NAME}_program 2>/dev/null || true
+rm -f $RC $BSD_LOG" || return 0
 	else
 		[ -f "$UNIT" ] && has_systemd && systemctl --user disable --now "$NAME" 2>/dev/null
 		rm -f "$UNIT"
@@ -144,20 +201,28 @@ service_off() {
 	say "Служба выключена, автозапуска нет."
 }
 
-# service_on writes the unit or plist from deploy/ of the installed release with this machine's paths and (re)starts it,
-# so it also serves as restart.
+# service_on writes the unit, plist or rc.d script from deploy/ of the installed release with this machine's paths and
+# (re)starts it, so it also serves as restart.
 service_on() {
-	v=$(installed) || die "агент не установлен"
-	case "$v" in v*) ;; *) v="v$v" ;; esac
 	if [ "$os" = linux ] && ! has_systemd; then
 		warn "systemd --user недоступен, служба не установлена. Запускайте вручную ($NAME run) или через Docker (см. README)."
 		return 0
 	fi
 	file="$NAME.service"
 	[ "$os" = darwin ] && file="$LABEL.plist"
-	curl -fsL -o "$tmp/service" "https://raw.githubusercontent.com/$REPO/$v/deploy/$file" ||
-		curl -fsSL -o "$tmp/service" "https://raw.githubusercontent.com/$REPO/main/deploy/$file" ||
-		die "не удалось скачать deploy/$file"
+	[ "$os" = freebsd ] && file="$RC_NAME.rc"
+	get_deploy "$file" || exit 1
+	if [ "$os" = freebsd ]; then
+		# rc.d needs root, so root fetches the script itself: the same commands work when the user runs them by hand.
+		as_root "fetch -qo $RC $deploy_url
+chmod 555 $RC
+sysrc ${RC_NAME}_enable=YES ${RC_NAME}_user=$(id -un) ${RC_NAME}_program=$BIN
+service $RC_NAME stop 2>/dev/null || true
+service $RC_NAME start" || return 0
+		say "${G}Служба rc.d $RC_NAME запущена${N} и стартует при загрузке системы."
+		say "Логи: tail -f $BSD_LOG"
+		return 0
+	fi
 	if [ "$os" = darwin ]; then
 		# The comment holds the manual steps; drop it with the placeholders.
 		sed -e '/<!--/,/-->/d' -e "s|/usr/local/bin/$NAME|$BIN|" -e "s|/Users/YOUR_USER|$HOME|" "$tmp/service" >"$tmp/plist"
@@ -187,10 +252,19 @@ do_install() {
 	was=$(service_state)
 	install_binary || exit 1
 	if paired; then say "Телефон уже подключён, pair пропущен."; else do_pair; fi
-	# A fresh install gets the service; an upgrade keeps the user's choice and restarts it.
+	# An existing service is restarted without asking. Otherwise a terminal asks; without one a fresh install gets the
+	# service and an upgrade keeps the user's choice.
 	if [ "$service" = 0 ]; then
 		say "Служба не установлена (--no-service). Запуск вручную: $NAME run"
-	elif [ "$fresh" = 1 ] || [ "$was" != none ]; then
+	elif [ "$was" != none ]; then
+		service_on
+	elif [ "$tty" = 1 ] && [ "$yes" = 0 ]; then
+		if ask_yes "Запускать агента в фоне как службу (автозапуск)?"; then
+			service_on
+		else
+			say "Служба не создана. Включить потом: этот скрипт, пункт «Включить службу», или $NAME run вручную."
+		fi
+	elif [ "$fresh" = 1 ] || [ "$yes" = 1 ]; then
 		service_on
 	fi
 }
@@ -227,6 +301,8 @@ do_status() {
 	say "Последние строки лога:"
 	if [ "$os" = darwin ]; then
 		tail -n 30 "$MAC_LOG" 2>/dev/null || say "(лога ещё нет)"
+	elif [ "$os" = freebsd ]; then
+		tail -n 30 "$BSD_LOG" 2>/dev/null || say "(лога ещё нет)"
 	else
 		journalctl --user -u "$NAME" -n 30 --no-pager 2>/dev/null || say "(журнал недоступен: journalctl --user -u $NAME)"
 	fi
@@ -273,7 +349,7 @@ menu() {
 		[ -x "$BIN" ] || [ "$(service_state)" != none ] && { say "8. Удалить полностью"; ok="$ok 8"; }
 		say "0. Выход"
 		printf '> '
-		read -r choice </dev/tty || return 0
+		read -r choice <"$TTY" || return 0
 		case " $ok " in *" $choice "*) ;; *) say "Нет такого пункта."; continue ;; esac
 		say ""
 		case "$choice" in
