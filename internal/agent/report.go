@@ -20,18 +20,19 @@ const (
 
 // Report is what status shows, read from the files without any network call. It holds no secret.
 type Report struct {
-	Dir       string
-	HasToken  bool
-	LastPoll  time.Time
-	LastError string
-	Cursor    int64
-	Session   SessionState
-	Isu       int64
+	Dir       string       `json:"dir"`
+	HasToken  bool         `json:"hasToken"`
+	LastPoll  time.Time    `json:"lastPoll"`
+	LastError string       `json:"lastError,omitempty"`
+	Cursor    int64        `json:"cursor"`
+	Session   SessionState `json:"session"`
+	Isu       int64        `json:"isu,omitempty"`
 	// Refreshed is the last ITMO.ID refresh; Expires is when the refresh token ends without one.
-	Refreshed, Expires time.Time
+	Refreshed time.Time `json:"refreshed"`
+	Expires   time.Time `json:"expires"`
 	// Events and Sport are newest first.
-	Events []state.EventRecord
-	Sport  []state.SportAttempt
+	Events []state.EventRecord  `json:"events"`
+	Sport  []state.SportAttempt `json:"sport"`
 }
 
 func ReadReport(files state.Files) (Report, error) {
@@ -101,11 +102,25 @@ func QueueLabel(queue string) string {
 	return "своб. место"
 }
 
-// Status prints the report as plain text.
-func Status(files state.Files, now time.Time, out io.Writer) error {
-	r, err := ReadReport(files)
-	if err != nil {
+// Status prints the state as plain text: a running agent's live state when there is one, else the files.
+func Status(files state.Files, live *Live, now time.Time, out io.Writer) error {
+	var r Report
+	if live != nil {
+		r = live.Report
+	} else if rr, err := ReadReport(files); err != nil {
 		return err
+	} else {
+		r = rr
+	}
+	switch {
+	case live == nil:
+		fmt.Fprintln(out, "Агент: не отвечает, данные из state.json")
+	case live.Running:
+		fmt.Fprintf(out, "Агент: работает с %s (экран: itmo-widgets-agent attach)\n", live.Started.Local().Format("02.01 15:04"))
+	case live.Stopped != "":
+		fmt.Fprintf(out, "Агент: запущен, опрос остановлен: %s\n", live.Stopped)
+	default:
+		fmt.Fprintln(out, "Агент: запущен, опрос не идёт")
 	}
 	conn := "нет связи"
 	if r.Online(now) {
@@ -144,6 +159,12 @@ func Status(files state.Files, now time.Time, out io.Writer) error {
 		for _, s := range r.Sport {
 			fmt.Fprintf(out, "  %s  занятие %d (%s, %s): %s\n", s.At.Local().Format("02.01 15:04"), s.LessonID,
 				QueueLabel(s.Queue), s.Start.Local().Format("02.01 15:04"), OutcomeLabel(s.Outcome))
+		}
+	}
+	if live != nil && len(live.Log) > 0 {
+		fmt.Fprintln(out, "\nЖурнал:")
+		for _, l := range live.Log {
+			fmt.Fprintf(out, "  %s\n", l)
 		}
 	}
 	return nil

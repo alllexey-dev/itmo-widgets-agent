@@ -329,7 +329,7 @@ func TestLogsNeverContainTokens(t *testing.T) {
 		t.Fatal(err)
 	}
 	var status strings.Builder
-	Status(h.a.Files, fake.Now, &status)
+	Status(h.a.Files, nil, fake.Now, &status)
 	logs := h.logs.String() + status.String()
 	if signIns, refreshes := h.f.Snapshot(); len(signIns) != 1 || refreshes != 1 {
 		t.Fatalf("scenario did not book with a refresh: %v %d", signIns, refreshes)
@@ -355,7 +355,7 @@ func TestStatusShowsHistory(t *testing.T) {
 	st.AddSport(state.SportAttempt{At: fake.Now, Queue: "auto", LessonID: 9001, Start: fake.Now, Outcome: "NO_CAPACITY"})
 	files.SaveState(st)
 	var out strings.Builder
-	if err := Status(files, fake.Now, &out); err != nil {
+	if err := Status(files, nil, fake.Now, &out); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"на связи", "ISU 100001", "действует до", "автозапись", "занятие 9001", "мест нет"} {

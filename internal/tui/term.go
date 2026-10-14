@@ -100,7 +100,8 @@ func (r *Ring) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func (r *Ring) last(n int) []string {
+// Last returns up to n of the newest lines.
+func (r *Ring) Last(n int) []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]string(nil), r.lines[max(0, len(r.lines)-n):]...)

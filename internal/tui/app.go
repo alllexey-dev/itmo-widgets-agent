@@ -13,18 +13,16 @@ import (
 	"github.com/alllexey-dev/itmo-widgets-agent/internal/agent"
 	"github.com/alllexey-dev/itmo-widgets-agent/internal/config"
 	"github.com/alllexey-dev/itmo-widgets-agent/internal/pair"
-	"github.com/alllexey-dev/itmo-widgets-agent/internal/state"
 )
 
 // ErrCancelled: the user left the pairing screen.
 var ErrCancelled = errors.New("подключение отменено")
 
-// App draws the screens; Log writes into Ring.
+// App draws the screens.
 type App struct {
 	Cfg     config.Config
 	Version string
 	Log     *slog.Logger
-	Ring    *Ring
 	Now     func() time.Time
 
 	scr    *screen
@@ -41,20 +39,20 @@ func (a *App) Pair(ctx context.Context, sessionOnly bool) (isu int64, err error)
 }
 
 // Run is `run` on a terminal: pairing when there is no token, then the agent with the status screen.
-func (a *App) Run(ctx context.Context, ag *agent.Agent) (err error) {
+func (a *App) Run(ctx context.Context, loop *agent.Loop) (err error) {
 	if a.scr, err = openScreen(); err != nil {
 		return err
 	}
 	defer a.scr.close()
 	for ctx.Err() == nil {
-		if _, err := ag.Files.Token(); err != nil {
+		if _, err := loop.Agent.Files.Token(); err != nil {
 			if _, err := a.pair(ctx, false); errors.Is(err, ErrCancelled) || ctx.Err() != nil {
 				return nil
 			} else if err != nil {
 				return err
 			}
 		}
-		if again, err := a.status(ctx, ag); !again {
+		if again, err := a.status(ctx, loop); !again {
 			return err
 		}
 	}
@@ -206,12 +204,11 @@ func (a *App) pairFrame(v *pairView, sessionOnly bool, failed error, frame int) 
 
 // status runs the agent under the status screen. It returns true to go back to pairing, false to quit; after a 401 it
 // stays on an «отключено» screen and quitting returns agent.ErrTokenRevoked (exit code 3).
-func (a *App) status(ctx context.Context, ag *agent.Agent) (bool, error) {
+func (a *App) status(ctx context.Context, loop *agent.Loop) (bool, error) {
 	loopCtx, stop := context.WithCancel(ctx)
 	defer stop()
-	started := a.Now()
 	done := make(chan error, 1)
-	go func() { done <- ag.Run(loopCtx) }()
+	go func() { done <- loop.Run(loopCtx) }()
 	running, confirm := true, false
 	var loopErr error
 	halt := func() {
@@ -229,7 +226,7 @@ func (a *App) status(ctx context.Context, ag *agent.Agent) (bool, error) {
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
 	for {
-		a.scr.draw(a.statusFrame(ag.Files, started, running, loopErr, confirm))
+		a.scr.draw(a.statusFrame(loop.Live(), confirm, false))
 		select {
 		case <-ctx.Done():
 			halt()
@@ -251,17 +248,14 @@ func (a *App) status(ctx context.Context, ag *agent.Agent) (bool, error) {
 				return true, nil
 			case gone:
 			case k == 's' && !confirm:
-				a.notice = ""
-				if _, err := a.pair(ctx, true); err == nil {
-					a.notice = "Новая сессия ИТМО сохранена."
-				}
+				a.newSession(ctx)
 			case k == 'u' && !confirm:
 				confirm = true
 			case k == 'y' && confirm:
 				halt()
 				a.notice, confirm = "Отключаем агент на сервере…", false
-				a.scr.draw(a.statusFrame(ag.Files, started, running, loopErr, confirm))
-				u, err := ag.Unpair(ctx)
+				a.scr.draw(a.statusFrame(loop.Live(), confirm, false))
+				u, err := loop.Agent.Unpair(ctx)
 				if err != nil {
 					a.notice = "Не удалось удалить файлы: " + err.Error()
 					continue
@@ -275,29 +269,41 @@ func (a *App) status(ctx context.Context, ag *agent.Agent) (bool, error) {
 	}
 }
 
-func (a *App) statusFrame(files state.Files, started time.Time, running bool, loopErr error, confirm bool) string {
+// newSession is [s]: the pairing screen for a new ITMO session; the agent loop picks up the new session.json.
+func (a *App) newSession(ctx context.Context) {
+	a.notice = ""
+	if _, err := a.pair(ctx, true); err == nil {
+		a.notice = "Новая сессия ИТМО сохранена."
+	}
+}
+
+// statusFrame draws l; attached is the attach screen, where [q] leaves the agent running.
+func (a *App) statusFrame(l agent.Live, confirm, attached bool) string {
 	now := a.Now()
+	r := l.Report
 	var b strings.Builder
-	b.WriteString(a.header("Состояние"))
+	b.WriteString(bold("ITMO.Widgets agent") + dim(fmt.Sprintf(" %s · %s", l.Version, l.Name)) + "\n" +
+		dim(strings.Repeat("─", 60)) + "\n" + bold("Состояние") + "\n")
 	if a.notice != "" {
 		b.WriteString(yellow(a.notice) + "\n")
 	}
 	b.WriteString("\n")
-	r, err := agent.ReadReport(files)
-	if err != nil {
-		b.WriteString(red("state.json не читается: "+err.Error()) + "\n")
+	if l.ReadError != "" {
+		b.WriteString(red("state.json не читается: "+l.ReadError) + "\n")
 	}
 	conn := green("● на связи")
 	switch {
-	case errors.Is(loopErr, agent.ErrTokenRevoked):
+	case l.Revoked:
 		conn = red("● отключено") + dim(": сервер отозвал токен агента")
-	case !running && loopErr != nil:
-		conn = red("● остановлен: " + loopErr.Error())
-	case !running:
+	case !l.Running && l.Stopped != "":
+		conn = red("● остановлен: " + l.Stopped)
+	case !l.Running:
 		conn = dim("● остановлен")
+	case !r.HasToken:
+		conn = yellow("● ждёт подключения (pair)")
 	case r.LastError != "":
 		conn = red("● нет связи") + dim(": "+r.LastError)
-	case r.LastPoll.Before(started) || !r.Online(now):
+	case r.LastPoll.Before(l.Started) || !r.Online(now):
 		conn = yellow("● подключаемся…")
 	}
 	row(&b, "Сервер", conn)
@@ -341,21 +347,27 @@ func (a *App) statusFrame(files state.Files, started time.Time, running bool, lo
 		fmt.Fprintf(&b, "  %s  занятие %s, %s  %s\n", dim(s.At.Local().Format("02.01 15:04")),
 			s.Start.Local().Format("02.01 15:04"), agent.QueueLabel(s.Queue), label)
 	}
-	if lines := a.Ring.last(4); len(lines) > 0 {
+	if lines := l.Log[max(0, len(l.Log)-4):]; len(lines) > 0 {
 		b.WriteString("\n" + bold("Журнал") + "\n")
 		for _, l := range lines {
 			b.WriteString(dim("  "+cut(l, 100)) + "\n")
 		}
 	}
 	b.WriteString("\n")
+	quit := "[q] выйти"
+	if attached {
+		quit = "[q] закрыть экран, агент продолжит работу"
+	}
 	switch {
-	case errors.Is(loopErr, agent.ErrTokenRevoked):
-		b.WriteString(dim("[p] подключить заново   [q] выйти"))
+	case l.Revoked && attached:
+		b.WriteString(dim(quit))
+	case l.Revoked:
+		b.WriteString(dim("[p] подключить заново   " + quit))
 	case confirm:
 		b.WriteString(yellow("Отключить агент? Сервер отзовёт токен, токен и сессия ИТМО будут удалены с этой машины.") + "\n" +
 			dim("[y] да   любая клавиша - нет"))
 	default:
-		b.WriteString(dim("[s] новая сессия ИТМО   [u] отключить   [q] выйти"))
+		b.WriteString(dim("[s] новая сессия ИТМО   [u] отключить   " + quit))
 	}
 	return b.String()
 }
