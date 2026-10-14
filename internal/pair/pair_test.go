@@ -189,7 +189,7 @@ func newWorld(t *testing.T) *world {
 		Backend: &backend.Client{BaseURL: w.b.Srv.URL, UserAgent: "t", HTTP: &http.Client{}},
 		ITMO:    &itmo.Client{HTTP: &http.Client{}, TokenURL: w.f.TokenURL(), BaseURL: w.f.Srv.URL, UserAgent: "t", Now: now},
 		Files:   w.files, Origin: "https://widgets.alllexey.dev", Name: "nas", Version: "test",
-		Out: w.out, Log: slog.New(slog.NewJSONHandler(w.logs, nil)), Now: now,
+		View: pair.Text{W: w.out}, Log: slog.New(slog.NewJSONHandler(w.logs, nil)), Now: now,
 		Sleep: func(ctx context.Context, d time.Duration) error { return ctx.Err() },
 	}
 	return w

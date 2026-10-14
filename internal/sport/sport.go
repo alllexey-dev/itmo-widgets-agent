@@ -14,6 +14,7 @@ import (
 	"github.com/alllexey-dev/itmo-widgets-agent/internal/backend"
 	"github.com/alllexey-dev/itmo-widgets-agent/internal/itmo"
 	"github.com/alllexey-dev/itmo-widgets-agent/internal/notify"
+	"github.com/alllexey-dev/itmo-widgets-agent/internal/state"
 )
 
 const maxLessons = 100
@@ -27,6 +28,8 @@ type Executor struct {
 	Notify  *notify.Ntfy
 	Log     *slog.Logger
 	Now     func() time.Time
+	// Record, when set, gets every booking decision for the status history.
+	Record func(state.SportAttempt)
 }
 
 type lesson struct {
@@ -98,12 +101,14 @@ func (e *Executor) Handle(ctx context.Context, queue string, payload json.RawMes
 		}
 		if slices.ContainsFunc(chosen, func(c itmo.ChosenLesson) bool { return c.ID == l.ID }) {
 			log.Info("already booked, reporting satisfied")
+			e.record(queue, l.ID, start, "ALREADY_BOOKED")
 			e.report(ctx, log, queue, l.ID, "mark-satisfied")
 			changed = true
 			continue
 		}
 		outcome, err := e.ITMO.SignIn(ctx, l.ID)
 		log.Info("sport sign-up", "outcome", outcome.String())
+		e.record(queue, l.ID, start, outcome.String())
 		label := fmt.Sprintf("%s, %s", section, start.In(moscow).Format("02.01 15:04"))
 		switch outcome {
 		case itmo.SignedIn:
@@ -150,6 +155,12 @@ func queued(entries []backend.Entry, queue string, lessonID int64) bool {
 		}
 	}
 	return false
+}
+
+func (e *Executor) record(queue string, id int64, start time.Time, outcome string) {
+	if e.Record != nil {
+		e.Record(state.SportAttempt{At: e.Now(), Queue: queue, LessonID: id, Start: start, Outcome: outcome})
+	}
 }
 
 func (e *Executor) report(ctx context.Context, log *slog.Logger, queue string, id int64, action string) {

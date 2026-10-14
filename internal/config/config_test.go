@@ -1,6 +1,7 @@
 package config
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,6 +21,9 @@ func TestLoad(t *testing.T) {
 			check: func(t *testing.T, c Config) {
 				if c.BackendURL != DefaultBackendURL || !c.Features["sport"] || !c.Features["friends"] || c.NtfyURL != "" {
 					t.Fatalf("unexpected defaults: %+v", c)
+				}
+				if c.UI != "auto" || c.LogLevel != slog.LevelInfo {
+					t.Fatalf("ui %q level %v", c.UI, c.LogLevel)
 				}
 				if c.TokenFile != filepath.Join(c.StateDir, "agent-token") {
 					t.Fatalf("token file %q", c.TokenFile)
@@ -63,6 +67,17 @@ func TestLoad(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "ui and log level",
+			env:  map[string]string{"IW_UI": "Plain", "IW_LOG_LEVEL": "warn"},
+			check: func(t *testing.T, c Config) {
+				if c.UI != "plain" || c.LogLevel != slog.LevelWarn {
+					t.Fatalf("ui %q level %v", c.UI, c.LogLevel)
+				}
+			},
+		},
+		{name: "bad ui", env: map[string]string{"IW_UI": "fancy"}, wantErr: "IW_UI"},
+		{name: "bad log level", env: map[string]string{"IW_LOG_LEVEL": "loud"}, wantErr: "IW_LOG_LEVEL"},
 		{name: "remote http is refused", env: map[string]string{"IW_BACKEND_URL": "http://widgets.alllexey.dev"}, wantErr: "https"},
 		{name: "unknown feature", env: map[string]string{"IW_FEATURES": "sport,marks"}, wantErr: "marks"},
 		{name: "bad file line", file: "IW_FEATURES\n", wantErr: "line 1"},

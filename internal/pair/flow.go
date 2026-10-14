@@ -34,7 +34,7 @@ type Flow struct {
 	Origin  string
 	Name    string
 	Version string
-	Out     io.Writer
+	View    View
 	Log     *slog.Logger
 	Now     func() time.Time
 	Sleep   func(context.Context, time.Duration) error
@@ -65,13 +65,9 @@ func (f *Flow) Pair(ctx context.Context, sessionOnly bool) error {
 	if err != nil {
 		return err
 	}
-	link := Link(f.Origin, ch.Code, t.PK, t.Secret)
-	fmt.Fprintln(f.Out, "Откройте ITMO.Widgets на телефоне -> Профиль -> «Подключить устройство» и отсканируйте QR:")
-	fmt.Fprintln(f.Out)
-	if err := WriteQR(f.Out, link); err != nil {
+	if err := f.View.Link(Link(f.Origin, ch.Code, t.PK, t.Secret), ch.ExpiresAt); err != nil {
 		return err
 	}
-	fmt.Fprintf(f.Out, "\nИли вставьте ссылку в приложении:\n%s\n\nСсылка действует 2 минуты, не пересылайте её.\n", link)
 
 	poll, err := f.wait(ctx, ch, SAS(id, t.PK, t.Secret))
 	if err != nil {
@@ -108,7 +104,7 @@ func (f *Flow) wait(ctx context.Context, ch backend.Challenge, sas string) (back
 		switch p.Status {
 		case "OPENED":
 			if !shown {
-				fmt.Fprintf(f.Out, "\nКод проверки: %s — сверьте его с экраном телефона и нажмите там «Подключить».\n", sas)
+				f.View.Opened(sas)
 				shown = true
 			}
 		case "APPROVED":
@@ -181,6 +177,36 @@ func (f *Flow) finish(ctx context.Context, token string, saveToken bool, bundleI
 		return err
 	}
 	f.Log.Info("paired", "isu", me.Isu)
-	fmt.Fprintf(f.Out, "\nПодключено (ISU %d). Запустите агент: itmo-widgets-agent run\n", me.Isu)
+	f.View.Paired(me.Isu)
 	return nil
+}
+
+// View shows the pairing to the user: Text prints it for logs and pipes, the TUI draws a screen.
+type View interface {
+	// Link shows the QR and the link; expiresAt may be zero.
+	Link(link string, expiresAt time.Time) error
+	// Opened shows the verification code once the phone opened the link.
+	Opened(sas string)
+	Paired(isu int64)
+}
+
+// Text is the plain View: the QR and the link go to W, which may be a log.
+type Text struct{ W io.Writer }
+
+func (t Text) Link(link string, _ time.Time) error {
+	fmt.Fprintln(t.W, "Откройте ITMO.Widgets на телефоне -> Профиль -> «Подключить устройство» и отсканируйте QR:")
+	fmt.Fprintln(t.W)
+	if err := WriteQR(t.W, link); err != nil {
+		return err
+	}
+	_, err := fmt.Fprintf(t.W, "\nИли вставьте ссылку в приложении:\n%s\n\nСсылка действует 2 минуты, не пересылайте её.\n", link)
+	return err
+}
+
+func (t Text) Opened(sas string) {
+	fmt.Fprintf(t.W, "\nКод проверки: %s — сверьте его с экраном телефона и нажмите там «Подключить».\n", sas)
+}
+
+func (t Text) Paired(isu int64) {
+	fmt.Fprintf(t.W, "\nПодключено (ISU %d). Запустите агент: itmo-widgets-agent run\n", isu)
 }

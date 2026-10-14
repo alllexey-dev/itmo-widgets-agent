@@ -6,8 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
+	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"time"
@@ -51,6 +51,7 @@ type Agent struct {
 	st          state.State
 	loadedMtime int64
 	sessionOK   bool
+	jitter      func(time.Duration) time.Duration
 }
 
 // Build wires the real clients. now is the only clock; tests pass a fake one.
@@ -78,16 +79,18 @@ func Build(cfg config.Config, version string, log *slog.Logger, now func() time.
 		}
 		return err
 	}
-	a.Sport = &sport.Executor{Backend: a.Backend, ITMO: a.ITMO, Notify: a.Notify, Log: log, Now: now}
+	a.Sport = &sport.Executor{Backend: a.Backend, ITMO: a.ITMO, Notify: a.Notify, Log: log, Now: now,
+		Record: func(at state.SportAttempt) { a.st.AddSport(at) }}
+	a.jitter = Jitter
 	return a
 }
 
 // PairFlow returns the pairing flow over the same clients.
-func (a *Agent) PairFlow(name, version string, out io.Writer) *pair.Flow {
+func (a *Agent) PairFlow(name, version string, view pair.View) *pair.Flow {
 	u, _ := url.Parse(a.Backend.BaseURL)
 	return &pair.Flow{
 		Backend: a.Backend, ITMO: a.ITMO, Files: a.Files, Origin: u.Scheme + "://" + u.Host,
-		Name: name, Version: version, Out: out, Log: a.Log, Now: a.Now, Sleep: a.Sleep,
+		Name: name, Version: version, View: view, Log: a.Log, Now: a.Now, Sleep: a.Sleep,
 	}
 }
 
@@ -131,6 +134,7 @@ func (a *Agent) Run(ctx context.Context) error {
 				return nil
 			}
 			if !a.st.HasSeen(ev.ID) {
+				a.st.AddEvent(state.EventRecord{At: a.Now(), Seq: ev.Seq, Type: ev.Type})
 				if err := a.handle(ctx, ev); err != nil {
 					a.Log.Warn("event handling failed", "type", ev.Type, "seq", ev.Seq, "err", err)
 				}
@@ -168,9 +172,15 @@ func (a *Agent) pollFailed(err error, backoff *time.Duration) (time.Duration, er
 		return accessOffPause, nil
 	default:
 		*backoff = NextBackoff(*backoff)
-		a.Log.Warn("poll failed", "err", err, "retryIn", backoff.String())
-		return *backoff, nil
+		pause := a.jitter(*backoff)
+		a.Log.Warn("poll failed", "err", err, "retryIn", pause.String())
+		return pause, nil
 	}
+}
+
+// Jitter spreads a pause over [d/2, d], so many agents do not reconnect in step after an outage.
+func Jitter(d time.Duration) time.Duration {
+	return d/2 + rand.N(d/2+1)
 }
 
 // NextBackoff doubles from 1 s up to 5 min.
@@ -329,39 +339,4 @@ func Health(files state.Files, now time.Time) error {
 		return errors.New("ITMO session closed")
 	}
 	return nil
-}
-
-// Status prints the agent's state without any network call.
-func Status(files state.Files, now time.Time, out io.Writer) error {
-	st, err := files.State()
-	if err != nil {
-		return err
-	}
-	_, tokenErr := files.Token()
-	session := "нет (выполните pair)"
-	if s, m, ok, err := files.Session(); err != nil {
-		session = "файл повреждён"
-	} else if ok && st.SessionClosedMtime != 0 && m == st.SessionClosedMtime {
-		session = "закрыта ИТМО (выполните pair --session)"
-	} else if ok {
-		session = fmt.Sprintf("есть (ISU %d, обновлена %s)", s.Isu, ago(now, s.RefreshedAt))
-	}
-	fmt.Fprintf(out, "Токен агента: %s\n", map[bool]string{true: "есть", false: "нет"}[tokenErr == nil])
-	fmt.Fprintf(out, "Сессия ИТМО: %s\n", session)
-	fmt.Fprintf(out, "Последний опрос: %s\n", ago(now, st.LastPollAt))
-	fmt.Fprintf(out, "Курсор событий: %d\n", st.Cursor)
-	if st.LastError != "" {
-		fmt.Fprintf(out, "Последняя ошибка: %s\n", st.LastError)
-	}
-	if files.Dir != "" {
-		fmt.Fprintf(out, "Папка: %s\n", files.Dir)
-	}
-	return nil
-}
-
-func ago(now, t time.Time) string {
-	if t.IsZero() {
-		return "никогда"
-	}
-	return fmt.Sprintf("%s назад", now.Sub(t).Round(time.Second))
 }

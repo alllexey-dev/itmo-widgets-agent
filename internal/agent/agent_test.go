@@ -56,6 +56,7 @@ func newHarness(t *testing.T, withSession bool) *harness {
 	}
 	h.a = Build(cfg, "test", slog.New(slog.NewJSONHandler(h.logs, nil)), h.clock.Now)
 	h.a.ITMO.TokenURL, h.a.ITMO.BaseURL = h.f.TokenURL(), h.f.Srv.URL
+	h.a.jitter = func(d time.Duration) time.Duration { return d }
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	h.ctx = ctx
@@ -103,6 +104,16 @@ func TestNextBackoff(t *testing.T) {
 	for _, tt := range tests {
 		if got := NextBackoff(tt.in); got != tt.want {
 			t.Errorf("NextBackoff(%v) = %v, want %v", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestJitter(t *testing.T) {
+	for _, d := range []time.Duration{time.Second, 5 * time.Minute} {
+		for range 100 {
+			if got := Jitter(d); got < d/2 || got > d {
+				t.Fatalf("Jitter(%v) = %v, want within [%v, %v]", d, got, d/2, d)
+			}
 		}
 	}
 }
@@ -197,6 +208,10 @@ func TestSameEventNeverBooksTwice(t *testing.T) {
 	}
 	if signIns, _ := h.f.Snapshot(); !slices.Equal(signIns, []int64{9001}) {
 		t.Fatalf("sign-ins %v, want one", signIns)
+	}
+	st, _ := h.a.Files.State()
+	if len(st.Sport) != 1 || st.Sport[0].LessonID != 9001 || st.Sport[0].Outcome != "SIGNED_IN" || len(st.Events) != 1 {
+		t.Fatalf("history: sport %+v events %+v", st.Sport, st.Events)
 	}
 }
 
@@ -326,5 +341,29 @@ func TestLogsNeverContainTokens(t *testing.T) {
 		if strings.Contains(logs, secret) {
 			t.Fatalf("logs contain %q:\n%s", secret, logs)
 		}
+	}
+}
+
+func TestStatusShowsHistory(t *testing.T) {
+	files := state.Files{Dir: t.TempDir()}
+	files.TokenPath = filepath.Join(files.Dir, "agent-token")
+	files.SaveToken(fake.AgentToken)
+	files.SaveSession(state.Session{Isu: 100001, RefreshToken: "SECRET-R", RefreshedAt: fake.Now,
+		RefreshExpiresAt: fake.Now.Add(30 * 24 * time.Hour)})
+	st := state.State{LastPollAt: fake.Now.Add(-time.Minute)}
+	st.AddEvent(state.EventRecord{At: fake.Now, Seq: 4, Type: "SPORT_AUTO_SIGN_LESSONS_PAYLOAD"})
+	st.AddSport(state.SportAttempt{At: fake.Now, Queue: "auto", LessonID: 9001, Start: fake.Now, Outcome: "NO_CAPACITY"})
+	files.SaveState(st)
+	var out strings.Builder
+	if err := Status(files, fake.Now, &out); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"на связи", "ISU 100001", "действует до", "автозапись", "занятие 9001", "мест нет"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("status lacks %q:\n%s", want, out.String())
+		}
+	}
+	if strings.Contains(out.String(), "SECRET") || strings.Contains(out.String(), fake.AgentToken) {
+		t.Fatalf("status prints a secret:\n%s", out.String())
 	}
 }
