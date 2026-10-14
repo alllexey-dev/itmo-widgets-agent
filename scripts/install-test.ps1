@@ -1,6 +1,7 @@
 # Runs install.ps1 against a fake release: scripts/install-test.ps1 INSTALLER VERSION.
 # IW_RELEASE_BASE serves VERSION/<assets> with a good SHA256SUMS and bad/<assets> with a wrong one.
 # Pairing is skipped through a token fixture. Registers and removes a real logon task.
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'Installer', Justification = 'used in Invoke-Installer')]
 param([string]$Installer, [string]$V)
 $ErrorActionPreference = 'Stop'
 $root = Join-Path ([IO.Path]::GetTempPath()) ([IO.Path]::GetRandomFileName())
