@@ -295,6 +295,7 @@ show_state() {
 do_status() {
 	show_state
 	[ -x "$BIN" ] || return 0
+	[ "$(service_state)" = running ] && say "Экран службы вживую: $NAME attach (q - закрыть, служба продолжит работу)"
 	say ""
 	"$BIN" status
 	[ "$(service_state)" = none ] && return 0
@@ -345,9 +346,11 @@ menu() {
 			[ "$s" != none ] && { say "4. Выключить службу"; say "5. Перезапустить службу"; ok="$ok 4 5"; }
 			say "6. Статус и логи"
 			ok="$ok 6"
-			paired && { say "7. Отключить агента (unpair)"; ok="$ok 7"; }
+			# attach draws a screen: it needs a real terminal for input and output, not an answers file.
+			[ "$s" = running ] && [ -c "$TTY" ] && [ -t 1 ] && { say "7. Открыть экран службы (attach)"; ok="$ok 7"; }
+			paired && { say "8. Отключить агента (unpair)"; ok="$ok 8"; }
 		fi
-		[ -x "$BIN" ] || [ "$(service_state)" != none ] && { say "8. Удалить полностью"; ok="$ok 8"; }
+		[ -x "$BIN" ] || [ "$(service_state)" != none ] && { say "9. Удалить полностью"; ok="$ok 9"; }
 		say "0. Выход"
 		printf '> '
 		read -r choice <"$TTY" || return 0
@@ -361,8 +364,9 @@ menu() {
 		4) (service_off) ;;
 		5) (service_on) ;;
 		6) (do_status) ;;
-		7) (do_unpair) ;;
-		8) (do_uninstall) ;;
+		7) "$BIN" attach <"$TTY" || warn "Экран не открылся: $NAME attach" ;;
+		8) (do_unpair) ;;
+		9) (do_uninstall) ;;
 		esac
 	done
 }

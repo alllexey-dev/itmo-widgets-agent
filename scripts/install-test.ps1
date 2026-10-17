@@ -42,6 +42,11 @@ Invoke-Installer -Service on -Version $V | Out-Null
 Start-Sleep 5
 Assert-True ((Get-ScheduledTask -TaskName $task).State -eq 'Running') 'the task is not running'
 Assert-True (Get-Process itmo-widgets-agent | Where-Object { $_.Path -eq $exe }) 'the agent process is not running'
+$out = Invoke-Installer -Status -Version $V
+# status of a running agent starts with "Запущен: да": the installer's -match still finds the token.
+Assert-True ($out -match 'Запущен: да') 'status: not from the running agent'
+Assert-True ($out -match 'Телефон: подключён') 'status: paired with the agent running'
+Assert-True ($out -match 'Экран службы вживую: .*attach') 'status: no attach hint'
 
 Invoke-Installer -Uninstall -Yes | Out-Null
 Assert-True (-not (Get-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue)) 'uninstall left the task'

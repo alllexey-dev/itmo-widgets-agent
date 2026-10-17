@@ -23,6 +23,14 @@ echo "$out" | grep -q "Агент:   ${v#v} (последняя)" || fail "statu
 echo "$out" | grep -q 'Телефон: подключён' || fail "status: paired"
 echo "$out" | grep -q 'Служба:  не установлена' || fail "status: service"
 
+# The menu with an answers file: no attach item without a terminal, and the renumbered items.
+echo 0 >"$HOME/answers"
+out=$(IW_VERSION="$v" IW_TTY="$HOME/answers" sh "$installer") || fail "menu: $out"
+echo "$out"
+echo "$out" | grep -q '^6. Статус и логи' || fail "menu: status item"
+echo "$out" | grep -q '^9. Удалить полностью' || fail "menu: uninstall item"
+! echo "$out" | grep -q 'attach' || fail "menu: attach without a terminal or a running service"
+
 # A terminal answering "n" to the service question: no service files.
 echo n >"$HOME/answers"
 out=$(IW_TTY="$HOME/answers" sh "$installer" --install --version "$v") || fail "install with the answer n: $out"
