@@ -151,6 +151,7 @@ function Show-State {
 function Show-Status {
     Show-State
     if (-not (Test-Path $Exe)) { return }
+    if ((Get-ServiceState) -eq 'running') { Write-Host "Экран службы вживую: & `"$Exe`" attach (q - закрыть, служба продолжит работу)" }
     Write-Host ''
     & $Exe status
     if (Test-Path $Log) { Write-Host "`nПоследние строки лога:"; Get-Content $Log -Tail 30 }
@@ -192,9 +193,13 @@ function Show-Menu {
             if ($s -eq 'none') { $items['3'] = 'Включить службу (автозапуск)' }
             if ($s -ne 'none') { $items['4'] = 'Выключить службу'; $items['5'] = 'Перезапустить службу' }
             $items['6'] = 'Статус и логи'
-            if ($paired) { $items['7'] = 'Отключить агента (unpair)' }
+            # attach draws a screen: it needs the console itself, not redirected input or output.
+            if ($s -eq 'running' -and -not $env:IW_TTY -and -not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected) {
+                $items['7'] = 'Открыть экран службы (attach)'
+            }
+            if ($paired) { $items['8'] = 'Отключить агента (unpair)' }
         }
-        if ((Test-Path $Exe) -or (Get-ServiceState) -ne 'none') { $items['8'] = 'Удалить полностью' }
+        if ((Test-Path $Exe) -or (Get-ServiceState) -ne 'none') { $items['9'] = 'Удалить полностью' }
         $items['0'] = 'Выход'
         $items.GetEnumerator() | ForEach-Object { Write-Host "$($_.Key). $($_.Value)" }
         $choice = (Read-Host '>').Trim()
@@ -208,8 +213,9 @@ function Show-Menu {
                 '4' { Disable-Service }
                 '5' { Enable-Service }
                 '6' { Show-Status }
-                '7' { Invoke-Unpair }
-                '8' { Invoke-Uninstall }
+                '7' { & $Exe attach; if ($LASTEXITCODE) { Write-Host "Экран не открылся: & `"$Exe`" attach" -ForegroundColor Yellow } }
+                '8' { Invoke-Unpair }
+                '9' { Invoke-Uninstall }
             }
         } catch { Write-Host "Ошибка: $_" -ForegroundColor Red }
     }

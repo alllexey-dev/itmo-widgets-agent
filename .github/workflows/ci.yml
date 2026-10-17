@@ -87,6 +87,14 @@ jobs:
           sleep 3
           out=$(sh install.sh --status --version v0.0.0-ci); echo "$out"
           echo "$out" | grep -q 'Служба:  работает'
+          # status of a running agent starts with "Запущен: да": the installer's greps still find the token.
+          echo "$out" | grep -q '^Запущен: да'
+          echo "$out" | grep -q 'Телефон: подключён'
+          echo "$out" | grep -q 'Экран службы вживую: itmo-widgets-agent attach'
+          # The menu reads an answers file here, not a terminal: no attach item.
+          echo 0 > answers
+          out=$(IW_VERSION=v0.0.0-ci IW_TTY=answers sh install.sh); echo "$out"
+          ! echo "$out" | grep -q 'Открыть экран службы'
           sh install.sh --uninstall --yes
           [ ! -e "$HOME/.local/bin/itmo-widgets-agent" ] && [ ! -e "$state/agent-token" ]
           sh install.sh --status --version v0.0.0-ci | grep -q 'не установлен'
@@ -169,7 +177,12 @@ jobs:
             sleep 3
             service itmo_widgets_agent status
             pgrep -U agent -x itmo-widgets-agent
-            su -l agent -c "IW_RELEASE_BASE=$IW_RELEASE_BASE sh $PWD/install.sh --status --version v0.0.0-ci" | grep 'Служба:  работает'
+            su -l agent -c "IW_RELEASE_BASE=$IW_RELEASE_BASE sh $PWD/install.sh --status --version v0.0.0-ci" > status.txt
+            cat status.txt
+            grep 'Служба:  работает' status.txt
+            grep '^Запущен: да' status.txt
+            grep 'Телефон: подключён' status.txt
+            grep 'Экран службы вживую' status.txt
             cat /var/log/itmo_widgets_agent.log
             service itmo_widgets_agent stop
             sysrc -x itmo_widgets_agent_enable itmo_widgets_agent_user itmo_widgets_agent_bin
