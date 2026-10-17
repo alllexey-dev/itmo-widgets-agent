@@ -54,4 +54,6 @@ if sh "$installer" --unpair </dev/null; then fail "unpair without --yes and a te
 sh "$installer" --uninstall --yes || fail "uninstall"
 [ ! -e "$bin" ] || fail "uninstall left the binary"
 [ ! -e "$IW_STATE_DIR/agent-token" ] || fail "uninstall left the token"
+rm -rf "$IW_STATE_DIR"
+sh "$installer" --uninstall --yes || fail "uninstall with nothing left to remove"
 echo "install.sh: all checks passed"
