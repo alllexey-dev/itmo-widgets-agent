@@ -11,7 +11,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"runtime"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -45,7 +47,34 @@ type Client struct {
 	BaseURL   string
 	Token     string
 	UserAgent string
-	HTTP      *http.Client
+	// XClient is the X-Client header value, see BuildInfo.XClient; empty sends none.
+	XClient string
+	HTTP    *http.Client
+}
+
+// BuildInfo is the build identity set through -ldflags.
+type BuildInfo struct {
+	Version, Commit, Channel, Source string
+}
+
+// XClient is the X-Client header (ADR 0034 in ITMO.Widgets): key=value pairs in a fixed order, empty values left
+// out. Each value keeps only [A-Za-z0-9._/+-] and at most 64 characters, so the header stays under 512.
+func (b BuildInfo) XClient() string {
+	pairs := [][2]string{{"kind", "agent"}, {"version", b.Version}, {"channel", b.Channel}, {"source", b.Source},
+		{"commit", b.Commit}, {"os", runtime.GOOS + "-" + runtime.GOARCH}}
+	var out []string
+	for _, p := range pairs {
+		v := strings.Map(func(r rune) rune {
+			if 'a' <= r && r <= 'z' || 'A' <= r && r <= 'Z' || '0' <= r && r <= '9' || strings.ContainsRune("._/+-", r) {
+				return r
+			}
+			return -1
+		}, p[1])
+		if v = v[:min(len(v), 64)]; v != "" {
+			out = append(out, p[0]+"="+v)
+		}
+	}
+	return strings.Join(out, "; ")
 }
 
 // WithToken returns a copy that authenticates with token.
@@ -191,6 +220,9 @@ func (c *Client) doWith(ctx context.Context, method, path string, timeout time.D
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", c.UserAgent)
+	if c.XClient != "" {
+		req.Header.Set("X-Client", c.XClient)
+	}
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
 	}

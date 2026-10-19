@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/alllexey-dev/itmo-widgets-agent/internal/agent"
+	"github.com/alllexey-dev/itmo-widgets-agent/internal/backend"
 	"github.com/alllexey-dev/itmo-widgets-agent/internal/config"
 	"github.com/alllexey-dev/itmo-widgets-agent/internal/pair"
 )
@@ -20,10 +21,10 @@ var ErrCancelled = errors.New("подключение отменено")
 
 // App draws the screens.
 type App struct {
-	Cfg     config.Config
-	Version string
-	Log     *slog.Logger
-	Now     func() time.Time
+	Cfg   config.Config
+	Build backend.BuildInfo
+	Log   *slog.Logger
+	Now   func() time.Time
 
 	scr    *screen
 	notice string
@@ -60,7 +61,7 @@ func (a *App) Run(ctx context.Context, loop *agent.Loop) (err error) {
 }
 
 func (a *App) header(title string) string {
-	return bold("ITMO.Widgets agent") + dim(fmt.Sprintf(" %s · %s", a.Version, a.Cfg.Name)) + "\n" +
+	return bold("ITMO.Widgets agent") + dim(fmt.Sprintf(" %s · %s", a.Build.Version, a.Cfg.Name)) + "\n" +
 		dim(strings.Repeat("─", 60)) + "\n" + bold(title) + "\n"
 }
 
@@ -124,7 +125,7 @@ func (a *App) pairOnce(ctx context.Context, sessionOnly bool) (int64, error) {
 	defer cancel()
 	v := &pairView{changed: make(chan struct{}, 1)}
 	// Own clients: the agent loop may run next to this flow.
-	flow := agent.Build(a.Cfg, a.Version, a.Log, a.Now).PairFlow(a.Cfg.Name, a.Version, v)
+	flow := agent.Build(a.Cfg, a.Build, a.Log, a.Now).PairFlow(a.Cfg.Name, a.Build.Version, v)
 	done := make(chan error, 1)
 	go func() { done <- flow.Pair(ctx, sessionOnly) }()
 	tick := time.NewTicker(500 * time.Millisecond)

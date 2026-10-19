@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/alllexey-dev/itmo-widgets-agent/internal/agent"
+	"github.com/alllexey-dev/itmo-widgets-agent/internal/backend"
 	"github.com/alllexey-dev/itmo-widgets-agent/internal/config"
 	"github.com/alllexey-dev/itmo-widgets-agent/internal/fake"
 	"github.com/alllexey-dev/itmo-widgets-agent/internal/state"
@@ -42,7 +43,7 @@ func newRig(t *testing.T) *rig {
 	cfg := config.Config{BackendURL: r.b.Srv.URL, StateDir: r.dir, TokenFile: filepath.Join(r.dir, "agent-token"),
 		Name: "nas", Features: map[string]bool{"sport": true}}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	a := agent.Build(cfg, "test", log, time.Now)
+	a := agent.Build(cfg, backend.BuildInfo{Version: "test"}, log, time.Now)
 	a.ITMO.TokenURL, a.ITMO.BaseURL = f.TokenURL(), f.Srv.URL
 	if err := a.Files.SaveToken(fake.AgentToken); err != nil {
 		t.Fatal(err)
