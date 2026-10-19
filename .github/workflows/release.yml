@@ -30,7 +30,8 @@ jobs:
           version=${GITHUB_REF_NAME#v}
           for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 freebsd/amd64 freebsd/arm64 windows/amd64; do
             os=${target%/*}; arch=${target#*/}; ext=""; [ "$os" = windows ] && ext=.exe
-            CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath -ldflags "-s -w -X main.version=$version" \
+            CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath \
+              -ldflags "-s -w -X main.version=$version -X main.commit=$GITHUB_SHA -X main.channel=github -X main.source=$GITHUB_REPOSITORY" \
               -o "dist/itmo-widgets-agent-$os-$arch$ext" ./cmd/itmo-widgets-agent
           done
           (cd dist && sha256sum * > SHA256SUMS)
@@ -56,5 +57,9 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
-          build-args: VERSION=${{ steps.tags.outputs.version }}
+          build-args: |
+            VERSION=${{ steps.tags.outputs.version }}
+            COMMIT=${{ github.sha }}
+            CHANNEL=github
+            SOURCE=${{ github.repository }}
           tags: ${{ steps.tags.outputs.list }}

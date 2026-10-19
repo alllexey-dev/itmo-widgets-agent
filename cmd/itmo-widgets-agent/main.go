@@ -10,12 +10,14 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/alllexey-dev/itmo-widgets-agent/internal/agent"
+	"github.com/alllexey-dev/itmo-widgets-agent/internal/backend"
 	"github.com/alllexey-dev/itmo-widgets-agent/internal/config"
 	"github.com/alllexey-dev/itmo-widgets-agent/internal/control"
 	"github.com/alllexey-dev/itmo-widgets-agent/internal/pair"
@@ -23,8 +25,14 @@ import (
 	"github.com/alllexey-dev/itmo-widgets-agent/internal/tui"
 )
 
-// version is set by the release build: -ldflags "-X main.version=1.0.0".
-var version = "dev"
+// Build identity, set through -ldflags "-X main.version=1.0.0 -X main.commit=<sha> -X main.channel=github
+// -X main.source=owner/name". Only the release workflow and the published image say channel github.
+var (
+	version = "dev"
+	commit  = ""
+	channel = "custom"
+	source  = "local"
+)
 
 const usage = `itmo-widgets-agent %s
 
@@ -101,9 +109,13 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		jsonOut = nil
 	}
 	log := newLogger(jsonOut, ring, cfg.LogLevel)
-	a := agent.Build(cfg, version, log, time.Now)
+	build := backend.BuildInfo{Version: version, Commit: commit, Channel: channel, Source: source}
+	if build.Commit == "" {
+		build.Commit = vcsRevision()
+	}
+	a := agent.Build(cfg, build, log, time.Now)
 	loop := &agent.Loop{Agent: a, Version: version, Name: cfg.Name, Lines: func() []string { return ring.Last(10) }}
-	app := &tui.App{Cfg: cfg, Version: version, Log: log, Now: time.Now}
+	app := &tui.App{Cfg: cfg, Build: build, Log: log, Now: time.Now}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -150,6 +162,18 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
+}
+
+// vcsRevision is the commit go build stamped from a git checkout, or "".
+func vcsRevision() string {
+	if bi, ok := debug.ReadBuildInfo(); ok {
+		for _, s := range bi.Settings {
+			if s.Key == "vcs.revision" {
+				return s.Value
+			}
+		}
+	}
+	return ""
 }
 
 // serveAndRun runs the agent with the control socket for attach and status; the socket goes away when it returns.

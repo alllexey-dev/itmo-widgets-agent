@@ -21,6 +21,12 @@ go test -race ./...
 go build -trimpath -ldflags "-s -w -X main.version=dev" ./cmd/itmo-widgets-agent
 ```
 
+Build identity goes into `X-Client` on every Backend request (ADR 0034 in ITMO.Widgets):
+`-X main.version`, `main.commit`, `main.channel` and `main.source`. A plain build says `channel=custom`,
+`source=local` and takes the commit from the git checkout when Go stamps it; the Dockerfile takes the same as
+`VERSION`, `COMMIT`, `CHANNEL` and `SOURCE` build args. Only `release.yml` sets `channel=github` and
+`source=<owner/repo>`, so forks and self-built agents show apart from official releases.
+
 Cross-build check (what CI runs):
 
 ```sh

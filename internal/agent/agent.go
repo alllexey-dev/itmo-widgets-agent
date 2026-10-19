@@ -57,8 +57,8 @@ type Agent struct {
 }
 
 // Build wires the real clients. now is the only clock; tests pass a fake one.
-func Build(cfg config.Config, version string, log *slog.Logger, now func() time.Time) *Agent {
-	ua := "itmo-widgets-agent/" + version
+func Build(cfg config.Config, build backend.BuildInfo, log *slog.Logger, now func() time.Time) *Agent {
+	ua := "itmo-widgets-agent/" + build.Version
 	plain := &http.Client{Transport: http.DefaultTransport}
 	itmoHTTP := &http.Client{
 		Transport:     budget.New(http.DefaultTransport, itmoPerHour, time.Hour, now),
@@ -66,7 +66,7 @@ func Build(cfg config.Config, version string, log *slog.Logger, now func() time.
 	}
 	a := &Agent{
 		Files:    state.Files{Dir: cfg.StateDir, TokenPath: cfg.TokenFile},
-		Backend:  &backend.Client{BaseURL: cfg.BackendURL, UserAgent: ua, HTTP: plain},
+		Backend:  &backend.Client{BaseURL: cfg.BackendURL, UserAgent: ua, XClient: build.XClient(), HTTP: plain},
 		ITMO:     &itmo.Client{HTTP: itmoHTTP, TokenURL: itmo.DefaultTokenURL, BaseURL: itmo.DefaultBaseURL, UserAgent: ua, Now: now},
 		Notify:   &notify.Ntfy{URL: cfg.NtfyURL, UserAgent: ua, HTTP: plain},
 		Features: cfg.Features,

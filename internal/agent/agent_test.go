@@ -54,7 +54,7 @@ func newHarness(t *testing.T, withSession bool) *harness {
 		BackendURL: h.b.Srv.URL, StateDir: dir, TokenFile: filepath.Join(dir, "agent-token"), NtfyURL: h.n.Srv.URL,
 		Name: "nas", Features: map[string]bool{"sport": true, "friends": true},
 	}
-	h.a = Build(cfg, "test", slog.New(slog.NewJSONHandler(h.logs, nil)), h.clock.Now)
+	h.a = Build(cfg, backend.BuildInfo{Version: "test"}, slog.New(slog.NewJSONHandler(h.logs, nil)), h.clock.Now)
 	h.a.ITMO.TokenURL, h.a.ITMO.BaseURL = h.f.TokenURL(), h.f.Srv.URL
 	h.a.jitter = func(d time.Duration) time.Duration { return d }
 	ctx, cancel := context.WithCancel(context.Background())
@@ -220,7 +220,7 @@ func newHarnessFrom(t *testing.T, old *harness) *harness {
 	h := *old
 	cfg := config.Config{BackendURL: h.b.Srv.URL, StateDir: old.a.Files.Dir, TokenFile: old.a.Files.TokenPath,
 		NtfyURL: h.n.Srv.URL, Name: "nas", Features: old.a.Features}
-	h.a = Build(cfg, "test", slog.New(slog.NewJSONHandler(h.logs, nil)), h.clock.Now)
+	h.a = Build(cfg, backend.BuildInfo{Version: "test"}, slog.New(slog.NewJSONHandler(h.logs, nil)), h.clock.Now)
 	h.a.ITMO.TokenURL, h.a.ITMO.BaseURL = h.f.TokenURL(), h.f.Srv.URL
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
