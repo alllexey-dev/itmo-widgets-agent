@@ -18,4 +18,4 @@ ITMO.Widgets agent dev · nas
 Журнал
   time=14:16:02 level=INFO msg="agent started" cursor=0
 
-[s] новая сессия ИТМО   [u] отключить   [q] выйти
+[s] обновить вход в ИТМО   [u] отключить   [q] выйти

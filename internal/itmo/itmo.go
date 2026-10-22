@@ -1,5 +1,5 @@
-// Package itmo is the agent's minimal client for ITMO.ID and My ITMO: token refresh, chosen sport lessons and the
-// sport sign-up. Nothing else. MyItmoApi (github.com/alllexey123/MyItmoApi) is the reference implementation; the
+// Package itmo is the agent's minimal client for ITMO.ID and My ITMO: token refresh, logout of its own session, chosen
+// sport lessons and the sport sign-up. Nothing else. MyItmoApi (github.com/alllexey123/MyItmoApi) is the reference implementation; the
 // wire details below mirror its ItmoIdClient, ItmoTransport and SportApi.
 package itmo
 
@@ -80,15 +80,7 @@ func (c *Client) Refresh(ctx context.Context) error {
 		// The 1.x wire form: plural "scopes", as MyItmoApi sends it.
 		"scopes": {"openid profile"},
 	}
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.TokenURL, strings.NewReader(form.Encode()))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("User-Agent", c.UserAgent)
-	status, body, err := c.send(req)
+	status, body, err := c.postForm(ctx, c.TokenURL, form)
 	if err != nil {
 		return err
 	}
@@ -117,6 +109,8 @@ func (c *Client) Refresh(ctx context.Context) error {
 	now := c.Now()
 	next := state.Session{
 		Isu:              c.session.Isu,
+		Sid:              c.session.Sid,
+		ExpiresAt:        c.session.ExpiresAt,
 		RefreshToken:     wire.RefreshToken,
 		RefreshExpiresAt: now.Add(time.Duration(wire.RefreshExpiresIn) * time.Second),
 		AccessToken:      wire.AccessToken,
@@ -128,6 +122,35 @@ func (c *Client) Refresh(ctx context.Context) error {
 		return c.Save(next)
 	}
 	return nil
+}
+
+// Logout ends this session at ITMO.ID: the OIDC logout with its refresh token ends exactly its sid, other sessions of
+// the account live. An OAuth error answer means the session had already ended, which is success too.
+func (c *Client) Logout(ctx context.Context, refreshToken string) error {
+	form := url.Values{"client_id": {clientID}, "refresh_token": {refreshToken}}
+	status, body, err := c.postForm(ctx, strings.TrimSuffix(c.TokenURL, "/token")+"/logout", form)
+	if err != nil || status/100 == 2 {
+		return err
+	}
+	var wire struct {
+		Error string `json:"error"`
+	}
+	if status < 500 && json.Unmarshal(body, &wire) == nil && strings.TrimSpace(wire.Error) != "" {
+		return nil
+	}
+	return &HTTPError{status}
+}
+
+func (c *Client) postForm(ctx context.Context, endpoint string, form url.Values) (int, []byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
+	if err != nil {
+		return 0, nil, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("User-Agent", c.UserAgent)
+	return c.send(req)
 }
 
 // ChosenLesson is a lesson the student is signed up for.

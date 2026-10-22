@@ -38,17 +38,17 @@ const usage = `itmo-widgets-agent %s
 
 Использование:
   itmo-widgets-agent [run]          работать: получать события и записывать на физкультуру
-  itmo-widgets-agent pair           подключить агент с телефона (QR или ссылка)
-  itmo-widgets-agent pair --session выдать агенту новую сессию ИТМО
-  itmo-widgets-agent login          запасной вход: refresh-токен ITMO.ID из stdin
+  itmo-widgets-agent pair           подключить агент с телефона (QR или ссылка): свой вход в ИТМО
+  itmo-widgets-agent renew          обновить вход агента в ИТМО (раз в 90 дней или после закрытия)
   itmo-widgets-agent status         показать состояние
   itmo-widgets-agent attach         экран запущенного агента (службы); q - закрыть, агент продолжит работу.
                                     То же: watch
-  itmo-widgets-agent unpair         отключить агент: отозвать токен на сервере, удалить токен и сессию ИТМО
+  itmo-widgets-agent unpair         отключить агент: завершить его вход в ИТМО, отозвать подключение,
+                                    удалить токен и сессию
   itmo-widgets-agent health         код выхода 0, если агент работает
   itmo-widgets-agent version        показать версию (или --version)
 
-Флаг run и pair:
+Флаг run, pair и renew:
   --ui=auto|tui|plain  экран в терминале или обычные логи; auto (по умолчанию) рисует экран,
                        только если запущен в терминале. То же задаёт IW_UI.
 
@@ -56,10 +56,10 @@ const usage = `itmo-widgets-agent %s
 `
 
 func main() {
-	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
-func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+func run(args []string, stdout, stderr io.Writer) int {
 	cmd := "run"
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		cmd, args = args[0], args[1:]
@@ -77,14 +77,13 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	fs := flag.NewFlagSet(cmd, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	sessionOnly := fs.Bool("session", false, "")
 	uiFlag := fs.String("ui", "", "")
 	err := fs.Parse(args)
 	switch {
 	case err != nil:
-	case !slices.Contains([]string{"run", "pair", "login", "status", "attach", "watch", "unpair", "health"}, cmd):
+	case !slices.Contains([]string{"run", "pair", "renew", "status", "attach", "watch", "unpair", "health"}, cmd):
 		err = fmt.Errorf("неизвестная команда %q", cmd)
-	case fs.NArg() > 0 || (*sessionOnly && cmd != "pair") || (*uiFlag != "" && cmd != "run" && cmd != "pair"):
+	case fs.NArg() > 0 || (*uiFlag != "" && cmd != "run" && cmd != "pair" && cmd != "renew"):
 		err = errors.New("лишние аргументы")
 	}
 	if err != nil {
@@ -102,7 +101,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 2
 	}
 	attach := cmd == "attach" || cmd == "watch"
-	screen := attach || (cmd == "run" || cmd == "pair") && (cfg.UI == "tui" || cfg.UI == "auto" && tui.IsTerminal())
+	pairing := cmd == "pair" || cmd == "renew"
+	screen := attach || (cmd == "run" || pairing) && (cfg.UI == "tui" || cfg.UI == "auto" && tui.IsTerminal())
 	ring := &tui.Ring{}
 	jsonOut := stderr
 	if screen {
@@ -126,17 +126,15 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		err = serveAndRun(ctx, cfg.StateDir, loop, log, func() error { return loop.Run(ctx) })
 	case attach:
 		err = attachTo(ctx, cfg.StateDir, app)
-	case cmd == "pair" && screen:
+	case pairing && screen:
 		var isu int64
-		if isu, err = app.Pair(ctx, *sessionOnly); err == nil {
-			pair.Text{W: stdout}.Paired(isu)
+		if isu, err = app.Pair(ctx, cmd == "renew"); err == nil {
+			pair.Text{W: stdout, Renew: cmd == "renew"}.Paired(isu)
 		}
-	case cmd == "pair":
-		err = a.PairFlow(cfg.Name, version, pair.Text{W: stdout}).Pair(ctx, *sessionOnly)
-	case cmd == "login":
-		err = a.PairFlow(cfg.Name, version, pair.Text{W: stdout}).Login(ctx, stdin)
+	case pairing:
+		err = a.PairFlow(cfg.Name, version, pair.Text{W: stdout, Renew: cmd == "renew"}).Pair(ctx, cmd == "renew")
 	case cmd == "status":
-		err = agent.Status(a.Files, snapshot(cfg.StateDir), time.Now(), stdout)
+		err = agent.Status(a.Files, snapshot(cfg.StateDir), a.Server(ctx), time.Now(), stdout)
 	case cmd == "unpair":
 		var u agent.Unpaired
 		if u, err = a.Unpair(ctx); err == nil {

@@ -1,5 +1,5 @@
-// Package backend is the client for the ITMO.Widgets Backend routes an agent may call
-// (Backend docs/contracts/agent.md and pairing.md).
+// Package backend is the client for the ITMO.Widgets Backend routes an agent connection may call
+// (Backend docs/contracts/connections.md).
 package backend
 
 import (
@@ -84,21 +84,39 @@ func (c *Client) WithToken(token string) *Client {
 	return &cp
 }
 
-type Identity struct {
-	Isu     int64    `json:"isu"`
-	TokenID string   `json:"tokenId"`
-	Name    string   `json:"name"`
-	Scopes  []string `json:"scopes"`
+// ClientMe is GET /api/client/me.
+type ClientMe struct {
+	Isu        int64      `json:"isu"`
+	Connection Connection `json:"connection"`
 }
 
-func (c *Client) Me(ctx context.Context) (Identity, error) {
-	var out Identity
-	return out, c.do(ctx, http.MethodGet, "/api/agent/me", 0, nil, &out)
+// Connection is the part of ConnectionInfo the agent shows.
+type Connection struct {
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Scopes []struct {
+		Scope struct {
+			ID    string `json:"id"`
+			Title string `json:"title"`
+		} `json:"scope"`
+		Granted bool `json:"granted"`
+	} `json:"scopes"`
+	ItmoStatus string `json:"itmoStatus"`
 }
 
-// RevokeSelf sends DELETE /api/agent/self: Backend revokes the calling token, as removing the device in the app does.
+func (c *Client) Me(ctx context.Context) (ClientMe, error) {
+	var out ClientMe
+	return out, c.do(ctx, http.MethodGet, "/api/client/me", 0, nil, &out)
+}
+
+// RevokeSelf sends DELETE /api/client/self: Backend revokes the calling connection, as «Отключить» in the app does.
 func (c *Client) RevokeSelf(ctx context.Context) error {
-	return c.do(ctx, http.MethodDelete, "/api/agent/self", 0, nil, nil)
+	return c.do(ctx, http.MethodDelete, "/api/client/self", 0, nil, nil)
+}
+
+// ReportStatus sends PUT /api/client/status: the ITMO session state ("ok", "closed" or "none") and the version.
+func (c *Client) ReportStatus(ctx context.Context, itmo, version string) error {
+	return c.do(ctx, http.MethodPut, "/api/client/status", 0, map[string]string{"itmo": itmo, "version": version}, nil)
 }
 
 type Event struct {
@@ -117,15 +135,12 @@ type Page struct {
 	Gap        bool    `json:"gap"`
 }
 
-// Events long-polls GET /api/agent/events; the read timeout is wait + 15 s, as the contract asks.
-func (c *Client) Events(ctx context.Context, after int64, wait int, itmoOK bool) (Page, error) {
-	itmo := "none"
-	if itmoOK {
-		itmo = "ok"
-	}
+// Events long-polls GET /api/client/events; itmo is "ok", "closed" or "none". The read timeout is wait + 15 s, as the
+// contract asks.
+func (c *Client) Events(ctx context.Context, after int64, wait int, itmo string) (Page, error) {
 	q := url.Values{"after": {strconv.FormatInt(after, 10)}, "wait": {strconv.Itoa(wait)}, "itmo": {itmo}}
 	var out Page
-	err := c.do(ctx, http.MethodGet, "/api/agent/events?"+q.Encode(), time.Duration(wait+15)*time.Second, nil, &out)
+	err := c.do(ctx, http.MethodGet, "/api/client/events?"+q.Encode(), time.Duration(wait+15)*time.Second, nil, &out)
 	return out, err
 }
 
@@ -158,46 +173,52 @@ func (c *Client) SyncSport(ctx context.Context, lessonIDs []int64) error {
 	return c.do(ctx, http.MethodPost, "/api/sport/sign/sync", 0, lessonIDs, nil)
 }
 
+// ChallengeRequest is CreateChallengeRequest; Kind is always CONNECT here.
+type ChallengeRequest struct {
+	Kind          string   `json:"kind"`
+	Client        string   `json:"client"`
+	KeyCommitment string   `json:"keyCommitment"`
+	Name          string   `json:"name"`
+	Version       string   `json:"version,omitempty"`
+	Platform      string   `json:"platform,omitempty"`
+	Scopes        []string `json:"scopes,omitempty"`
+}
+
+// Challenge is CreatedChallenge. ClaimSecret proves the claim and is never shown.
 type Challenge struct {
-	ID         string    `json:"id"`
-	Code       string    `json:"code"`
-	PollSecret string    `json:"pollSecret"`
-	ExpiresAt  time.Time `json:"expiresAt"`
+	ID          string    `json:"challengeId"`
+	Code        string    `json:"code"`
+	ClaimSecret string    `json:"claimSecret"`
+	ExpiresAt   time.Time `json:"expiresAt"`
 }
 
-// CreatePairing posts POST /api/pair/challenges (anonymous) for kind AGENT.
-func (c *Client) CreatePairing(ctx context.Context, keyCommitment, name, version string) (Challenge, error) {
-	body := map[string]string{"kind": "AGENT", "keyCommitment": keyCommitment, "name": name, "version": version}
+// CreatePairing posts POST /api/pair/challenges (anonymous).
+func (c *Client) CreatePairing(ctx context.Context, req ChallengeRequest) (Challenge, error) {
 	var out Challenge
-	return out, c.WithToken("").do(ctx, http.MethodPost, "/api/pair/challenges", 0, body, &out)
+	return out, c.WithToken("").do(ctx, http.MethodPost, "/api/pair/challenges", 0, req, &out)
 }
 
-// CreateSessionPairing posts POST /api/agent/pair/session (agent token) for kind AGENT_SESSION.
-func (c *Client) CreateSessionPairing(ctx context.Context, keyCommitment string) (Challenge, error) {
+// RenewPairing posts POST /api/client/pair/renew (connection token) for kind RENEW.
+func (c *Client) RenewPairing(ctx context.Context, keyCommitment string) (Challenge, error) {
 	var out Challenge
-	return out, c.do(ctx, http.MethodPost, "/api/agent/pair/session", 0, map[string]string{"keyCommitment": keyCommitment}, &out)
+	return out, c.do(ctx, http.MethodPost, "/api/client/pair/renew", 0, map[string]string{"keyCommitment": keyCommitment}, &out)
 }
 
-type Poll struct {
+// Claim is PairingClaimResponse: Status PENDING or OPENED until the phone approves, then CLAIMED once.
+type Claim struct {
 	Status       string `json:"status"`
+	Token        string `json:"token"`
 	SealedBundle string `json:"sealedBundle"`
-	AgentToken   *struct {
-		Token string `json:"token"`
-	} `json:"agentToken"`
 }
 
-// PollPairing reads GET /api/pair/challenges/{id} with X-Poll-Secret.
-func (c *Client) PollPairing(ctx context.Context, id, pollSecret string) (Poll, error) {
-	var out Poll
-	return out, c.WithToken("").doWith(ctx, http.MethodGet, "/api/pair/challenges/"+url.PathEscape(id), 0, nil, &out,
-		map[string]string{"X-Poll-Secret": pollSecret})
+// ClaimPairing posts POST /api/pair/challenges/{id}/claim (anonymous) with the claim secret.
+func (c *Client) ClaimPairing(ctx context.Context, id, claimSecret string) (Claim, error) {
+	var out Claim
+	return out, c.WithToken("").do(ctx, http.MethodPost, "/api/pair/challenges/"+url.PathEscape(id)+"/claim", 0,
+		map[string]string{"claimSecret": claimSecret}, &out)
 }
 
 func (c *Client) do(ctx context.Context, method, path string, timeout time.Duration, in, out any) error {
-	return c.doWith(ctx, method, path, timeout, in, out, nil)
-}
-
-func (c *Client) doWith(ctx context.Context, method, path string, timeout time.Duration, in, out any, headers map[string]string) error {
 	if timeout == 0 {
 		timeout = 30 * time.Second
 	}
@@ -225,9 +246,6 @@ func (c *Client) doWith(ctx context.Context, method, path string, timeout time.D
 	}
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
-	}
-	for k, v := range headers {
-		req.Header.Set(k, v)
 	}
 	resp, err := c.HTTP.Do(req)
 	if err != nil {

@@ -4,7 +4,7 @@
 // The agent sends {"status":{...}} with the whole agent.Live on connect and again whenever it changes (checked once a
 // second), and {"reply":{...}} after a command. The client sends {"cmd":"unpair"}. A new ITMO session needs no
 // command: attach runs the pairing on its own terminal and the agent picks up the new session.json, as with
-// `pair --session`. Nothing on the socket carries the agent token or ITMO tokens; every line also passes redact.
+// `renew`. Nothing on the socket carries the connection token or ITMO tokens; every line also passes redact.
 package control
 
 import (

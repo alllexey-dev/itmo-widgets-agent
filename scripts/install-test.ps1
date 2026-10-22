@@ -10,7 +10,7 @@ $env:LOCALAPPDATA = "$root\local"
 $env:IW_STATE_DIR = "$root\state"
 $env:IW_BACKEND_URL = 'http://127.0.0.1:9'
 New-Item -ItemType Directory -Force $env:LOCALAPPDATA, $env:IW_STATE_DIR | Out-Null
-Set-Content "$env:IW_STATE_DIR\agent-token" 'iwa_test_fixture'
+Set-Content "$env:IW_STATE_DIR\agent-token" 'iwc_test_fixture'
 $exe = "$env:LOCALAPPDATA\itmo-widgets-agent\itmo-widgets-agent.exe"
 $task = 'ITMO.Widgets agent'
 function Invoke-Installer { & $Installer @args *>&1 | Out-String | Tee-Object -Variable out | Write-Output; $out }

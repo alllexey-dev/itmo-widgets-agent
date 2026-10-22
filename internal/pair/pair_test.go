@@ -17,7 +17,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -30,7 +32,7 @@ import (
 	"github.com/alllexey-dev/itmo-widgets-agent/internal/state"
 )
 
-// The phone's side, written independently of package pair from the hand-off plan's formulas.
+// The phone's side, written independently of package pair from the hand-off plan's formulas (the app's PairingCrypto).
 
 var raw = base64.RawURLEncoding
 
@@ -71,8 +73,9 @@ func seal(t testing.TB, a sealArgs) string {
 	info = append(info, []byte(a.infoKind+"\x00")...)
 	info = append(info, a.s...)
 	plain, _ := json.Marshal(map[string]any{
-		"v": a.version, "challengeId": a.bundleID, "kind": a.bundleKind, "isu": a.isu,
-		"refreshToken": "SECRET-R0", "refreshExpiresAt": "2026-11-06T06:00:00Z", "issuedAt": a.issuedAt.Format(time.RFC3339),
+		"v": a.version, "challengeId": a.bundleID, "kind": a.bundleKind, "isu": a.isu, "issuedAt": a.issuedAt.Format(time.RFC3339),
+		"itmo": map[string]any{"sid": "sid-new", "expiresAt": "2027-01-05T06:00:00Z", "refreshToken": "SECRET-R0",
+			"refreshExpiresAt": "2026-11-06T06:00:00Z"},
 	})
 	pub, err := hpke.DHKEM(ecdh.X25519()).NewPublicKey(a.pk)
 	if err != nil {
@@ -119,8 +122,8 @@ func TestOpen(t *testing.T) {
 		{name: "wrong pairing secret", mutate: func(a *sealArgs) { a.s = otherS }, wantErr: true},
 		{name: "sealed for another challenge", mutate: func(a *sealArgs) { a.infoID, a.bundleID = other, other }, wantErr: true},
 		{name: "plaintext names another challenge", mutate: func(a *sealArgs) { a.bundleID = other }, wantErr: true},
-		{name: "sealed for another kind", mutate: func(a *sealArgs) { a.infoKind, a.bundleKind = pair.KindAgentSession, pair.KindAgentSession }, wantErr: true},
-		{name: "plaintext names another kind", mutate: func(a *sealArgs) { a.bundleKind = pair.KindAgentSession }, wantErr: true},
+		{name: "sealed for another kind", mutate: func(a *sealArgs) { a.infoKind, a.bundleKind = pair.KindRenew, pair.KindRenew }, wantErr: true},
+		{name: "plaintext names another kind", mutate: func(a *sealArgs) { a.bundleKind = pair.KindRenew }, wantErr: true},
 		{name: "issued 16 minutes ago", mutate: func(a *sealArgs) { a.issuedAt = fake.Now.Add(-16 * time.Minute) }, wantErr: true},
 		{name: "unknown version", mutate: func(a *sealArgs) { a.version = 2 }, wantErr: true},
 		{name: "tampered ciphertext", mutate: func(a *sealArgs) { a.corruptLast = true }, wantErr: true},
@@ -131,17 +134,18 @@ func TestOpen(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			a := sealArgs{pk: target.PK, s: target.Secret, infoID: fake.ChallengeID, infoKind: pair.KindAgent,
-				bundleID: fake.ChallengeID, bundleKind: pair.KindAgent, isu: 100001, issuedAt: fake.Now.Add(-time.Minute), version: 1}
+			a := sealArgs{pk: target.PK, s: target.Secret, infoID: fake.ChallengeID, infoKind: pair.KindConnect,
+				bundleID: fake.ChallengeID, bundleKind: pair.KindConnect, isu: 100001, issuedAt: fake.Now.Add(-time.Minute), version: 1}
 			tt.mutate(&a)
-			b, err := target.Open(seal(t, a), fake.ChallengeID, pair.KindAgent, fake.Now)
+			b, err := target.Open(seal(t, a), fake.ChallengeID, pair.KindConnect, fake.Now)
 			if tt.wantErr {
 				if !errors.Is(err, pair.ErrBundle) {
 					t.Fatalf("want ErrBundle, got %v", err)
 				}
 				return
 			}
-			if err != nil || b.RefreshToken != "SECRET-R0" || b.Isu != 100001 {
+			if err != nil || b.Itmo.RefreshToken != "SECRET-R0" || b.Itmo.Sid != "sid-new" || b.Isu != 100001 ||
+				!b.Itmo.ExpiresAt.Equal(time.Date(2027, 1, 5, 6, 0, 0, 0, time.UTC)) {
 				t.Fatalf("open failed: %v", err)
 			}
 			if s := fmt.Sprintf("%v %+v %#v", b, b, b); strings.Contains(s, "SECRET") {
@@ -189,30 +193,31 @@ func newWorld(t *testing.T) *world {
 		Backend: &backend.Client{BaseURL: w.b.Srv.URL, UserAgent: "t", HTTP: &http.Client{}},
 		ITMO:    &itmo.Client{HTTP: &http.Client{}, TokenURL: w.f.TokenURL(), BaseURL: w.f.Srv.URL, UserAgent: "t", Now: now},
 		Files:   w.files, Origin: "https://widgets.alllexey.dev", Name: "nas", Version: "test",
-		View: pair.Text{W: w.out}, Log: slog.New(slog.NewJSONHandler(w.logs, nil)), Now: now,
+		Scopes: []string{"sport", "friends:read"}, View: pair.Text{W: w.out}, Log: slog.New(slog.NewJSONHandler(w.logs, nil)), Now: now,
 		Sleep: func(ctx context.Context, d time.Duration) error { return ctx.Err() },
 	}
 	return w
 }
 
-// phone scripts the poll answers: PENDING, OPENED, then APPROVED with a bundle sealed from the printed link.
-func (w *world) phone(t *testing.T, kind string, isu int64, final string) {
-	w.b.Poll = func(n int) (int, string) {
+// phone scripts the claim answers: PENDING, a 429, OPENED, then CLAIMED with a bundle sealed from the printed link.
+// expired answers 404 instead of the CLAIMED one.
+func (w *world) phone(t *testing.T, kind string, isu int64, expired bool) {
+	w.b.Claim = func(n int) (int, string) {
 		switch n {
 		case 1:
-			return 200, `{"status":"PENDING"}`
+			return 202, `{"status":"PENDING","token":null,"connection":null,"sealedBundle":null}`
 		case 2:
 			return 429, ""
 		case 3:
-			return 200, `{"status":"OPENED"}`
+			return 202, `{"status":"OPENED","token":null,"connection":null,"sealedBundle":null}`
 		}
-		if final != "" {
-			return 200, `{"status":"` + final + `"}`
+		if expired {
+			return 404, ""
 		}
 		m := linkRE.FindStringSubmatch(w.out.String())
 		if m == nil {
 			t.Error("no pairing link printed")
-			return 200, `{"status":"EXPIRED"}`
+			return 404, ""
 		}
 		pk, _ := raw.DecodeString(m[2])
 		s, _ := raw.DecodeString(m[3])
@@ -225,45 +230,60 @@ func (w *world) phone(t *testing.T, kind string, isu int64, final string) {
 		sealed := seal(t, sealArgs{pk: pk, s: s, infoID: fake.ChallengeID, infoKind: kind, bundleID: fake.ChallengeID,
 			bundleKind: kind, isu: isu, issuedAt: fake.Now, version: 1})
 		token := `null`
-		if kind == pair.KindAgent {
-			token = `{"token":"` + fake.AgentToken + `","info":{"id":"t1"}}`
+		if kind == pair.KindConnect {
+			token = `"` + fake.AgentToken + `"`
 		}
-		return 200, `{"status":"APPROVED","sealedBundle":"` + sealed + `","agentToken":` + token + `}`
+		return 200, `{"status":"CLAIMED","token":` + token + `,"connection":{"id":"c1"},"sealedBundle":"` + sealed + `"}`
 	}
 }
 
 func TestPair(t *testing.T) {
 	tests := []struct {
 		name        string
-		session     bool
+		renew       bool
+		paired      bool
 		isu         int64
-		final       string
+		expired     bool
 		tokenStatus int
 		wantErr     error
 		wantFiles   bool
+		// wantRevoked: a failed CONNECT revokes its new connection; wantLogouts: ITMO sessions ended.
+		wantRevoked bool
+		wantLogouts []string
 	}{
 		{name: "new agent", isu: 100001, wantFiles: true},
-		{name: "new session for a connected agent", session: true, isu: 100001, wantFiles: true},
-		{name: "ITMO rejects the handed-over token: nothing written", isu: 100001, tokenStatus: 400, wantErr: pair.ErrSessionRejected},
-		{name: "session of another account: nothing written", isu: 100002, wantErr: pair.ErrOtherAccount},
-		{name: "rejected on the phone", isu: 100001, final: "REJECTED", wantErr: pair.ErrRejected},
-		{name: "expired", isu: 100001, final: "EXPIRED", wantErr: pair.ErrExpired},
+		{name: "renew ends the replaced session", renew: true, paired: true, isu: 100001, wantFiles: true,
+			wantLogouts: []string{"SECRET-OLD"}},
+		{name: "ITMO rejects the new session: nothing written, connection revoked", isu: 100001, tokenStatus: 400,
+			wantErr: pair.ErrSessionRejected, wantRevoked: true, wantLogouts: []string{"SECRET-R0"}},
+		{name: "session of another account: nothing written, both ended", isu: 100002, wantErr: pair.ErrOtherAccount,
+			wantRevoked: true, wantLogouts: []string{"SECRET-R0"}},
+		{name: "renew of another account keeps the old files", renew: true, paired: true, isu: 100002,
+			wantErr: pair.ErrOtherAccount, wantLogouts: []string{"SECRET-R0"}},
+		{name: "expired", isu: 100001, expired: true, wantErr: pair.ErrExpired},
+		{name: "pair when already paired", paired: true, isu: 100001, wantErr: pair.ErrPaired},
+		{name: "renew without a connection", renew: true, isu: 100001, wantErr: os.ErrNotExist},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			w := newWorld(t)
-			kind := pair.KindAgent
-			if tt.session {
-				kind = pair.KindAgentSession
+			kind := pair.KindConnect
+			if tt.renew {
+				kind = pair.KindRenew
+			}
+			if tt.paired {
 				if err := w.files.SaveToken(fake.AgentToken); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := w.files.SaveSession(state.Session{Isu: 100001, Sid: "sid-old", RefreshToken: "SECRET-OLD"}); err != nil {
 					t.Fatal(err)
 				}
 			}
 			if tt.tokenStatus != 0 {
 				w.f.TokenStatus, w.f.TokenBody = tt.tokenStatus, `{"error":"invalid_grant"}`
 			}
-			w.phone(t, kind, tt.isu, tt.final)
-			err := w.flow.Pair(context.Background(), tt.session)
+			w.phone(t, kind, tt.isu, tt.expired)
+			err := w.flow.Pair(context.Background(), tt.renew)
 			if tt.wantErr != nil {
 				if !errors.Is(err, tt.wantErr) {
 					t.Fatalf("want %v, got %v", tt.wantErr, err)
@@ -271,21 +291,32 @@ func TestPair(t *testing.T) {
 			} else if err != nil {
 				t.Fatal(err)
 			}
-			_, _, hasSession, _ := w.files.Session()
-			if hasSession != tt.wantFiles {
-				t.Fatalf("session written = %v, want %v", hasSession, tt.wantFiles)
+			s, _, hasSession, _ := w.files.Session()
+			if hasSession != (tt.wantFiles || tt.paired) || (hasSession && !tt.wantFiles && s.Sid != "sid-old") {
+				t.Fatalf("session %v (sid %q), want new %v", hasSession, s.Sid, tt.wantFiles)
 			}
 			_, tokenErr := w.files.Token()
-			if wantToken := tt.wantFiles || tt.session; (tokenErr == nil) != wantToken {
+			if wantToken := tt.wantFiles || tt.paired; (tokenErr == nil) != wantToken {
 				t.Fatalf("token present = %v, want %v", tokenErr == nil, wantToken)
 			}
+			if (w.b.SelfRevokes == 1) != tt.wantRevoked {
+				t.Fatalf("revokes %d, want revoked %v", w.b.SelfRevokes, tt.wantRevoked)
+			}
+			if got := w.f.LoggedOut(); !slices.Equal(got, tt.wantLogouts) {
+				t.Fatalf("logged out %v, want %v", got, tt.wantLogouts)
+			}
 			if tt.wantFiles {
-				s, _, _, _ := w.files.Session()
-				if s.RefreshToken != "SECRET-REFRESH-1" || s.Isu != 100001 || w.f.RefreshTokens[0] != "SECRET-R0" {
-					t.Fatal("the handed-over token was not refreshed before saving")
+				if s.RefreshToken != "SECRET-REFRESH-1" || s.Isu != 100001 || s.Sid != "sid-new" || w.f.RefreshTokens[0] != "SECRET-R0" ||
+					!s.ExpiresAt.Equal(time.Date(2027, 1, 5, 6, 0, 0, 0, time.UTC)) {
+					t.Fatal("the new session was not refreshed before saving")
 				}
-				if want := map[bool]string{false: "AGENT", true: ""}[tt.session]; w.b.Created[0]["kind"] != want {
-					t.Fatalf("created %v", w.b.Created[0])
+				want := map[string]any{"kind": "CONNECT", "client": "agent", "keyCommitment": w.b.Created[0]["keyCommitment"],
+					"name": "nas", "version": "test", "platform": pair.Platform(), "scopes": []any{"sport", "friends:read"}}
+				if tt.renew {
+					want = map[string]any{"keyCommitment": w.b.Created[0]["keyCommitment"]}
+				}
+				if !reflect.DeepEqual(w.b.Created[0], want) {
+					t.Fatalf("created %v, want %v", w.b.Created[0], want)
 				}
 				fi, _ := os.Stat(w.files.SessionPath())
 				if fi.Mode().Perm() != 0o600 {
@@ -294,50 +325,6 @@ func TestPair(t *testing.T) {
 			}
 			if strings.Contains(w.logs.String(), "SECRET") || strings.Contains(w.logs.String(), fake.AgentToken) {
 				t.Fatalf("logs leak a token: %s", w.logs.String())
-			}
-		})
-	}
-}
-
-func TestLogin(t *testing.T) {
-	tests := []struct {
-		name        string
-		stdin       string
-		tokenFile   bool
-		tokenStatus int
-		wantErr     error
-	}{
-		{name: "refresh and agent token from stdin", stdin: "\n" + fake.AgentToken + "\nSECRET-R0\n"},
-		{name: "refresh only, token already saved", stdin: "SECRET-R0\n", tokenFile: true},
-		{name: "no refresh token", stdin: fake.AgentToken + "\n", wantErr: pair.ErrNoRefreshToken},
-		{name: "no agent token anywhere", stdin: "SECRET-R0\n", wantErr: os.ErrNotExist},
-		{name: "ITMO rejects the token", stdin: "SECRET-R0\n", tokenFile: true, tokenStatus: 401, wantErr: pair.ErrSessionRejected},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			w := newWorld(t)
-			if tt.tokenFile {
-				w.files.SaveToken(fake.AgentToken)
-			}
-			if tt.tokenStatus != 0 {
-				w.f.TokenStatus, w.f.TokenBody = tt.tokenStatus, `{"error":"invalid_grant"}`
-			}
-			err := w.flow.Login(context.Background(), strings.NewReader(tt.stdin))
-			_, _, hasSession, _ := w.files.Session()
-			if tt.wantErr != nil {
-				if !errors.Is(err, tt.wantErr) {
-					t.Fatalf("want %v, got %v", tt.wantErr, err)
-				}
-				if hasSession {
-					t.Fatal("session written after a failure")
-				}
-				return
-			}
-			if err != nil || !hasSession {
-				t.Fatalf("login failed: %v", err)
-			}
-			if tok, _ := w.files.Token(); tok != fake.AgentToken {
-				t.Fatal("agent token not saved")
 			}
 		})
 	}

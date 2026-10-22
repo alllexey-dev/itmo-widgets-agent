@@ -1,5 +1,6 @@
-// Package pair implements the target side of device pairing: the ephemeral key, the QR and link, the claim and
-// the checks of the sealed ITMO session (ITMO.Widgets session hand-off plan, section 2.1; Backend pairing.md).
+// Package pair implements the client side of a connection pairing: the ephemeral key, the QR and link, the claim and
+// the checks of the sealed ITMO session (ITMO.Widgets connected-clients plan, section 5; Backend connections.md).
+// The cryptography is the app's PairingCrypto byte for byte.
 package pair
 
 import (
@@ -17,9 +18,9 @@ import (
 )
 
 const (
-	KindAgent        = "AGENT"
-	KindAgentSession = "AGENT_SESSION"
-	maxBundleAge     = 15 * time.Minute
+	KindConnect  = "CONNECT"
+	KindRenew    = "RENEW"
+	maxBundleAge = 15 * time.Minute
 )
 
 var b64 = base64.RawURLEncoding
@@ -98,15 +99,19 @@ func ParseUUID(s string) ([16]byte, error) {
 	return out, err
 }
 
-// Bundle is the plaintext the phone seals. It is secret: String never prints it.
+// Bundle is the plaintext the phone seals: the agent's own ITMO.ID session. It is secret: String never prints it.
 type Bundle struct {
-	V                int       `json:"v"`
-	ChallengeID      string    `json:"challengeId"`
-	Kind             string    `json:"kind"`
-	Isu              int64     `json:"isu"`
-	RefreshToken     string    `json:"refreshToken"`
-	RefreshExpiresAt time.Time `json:"refreshExpiresAt"`
-	IssuedAt         time.Time `json:"issuedAt"`
+	V           int       `json:"v"`
+	ChallengeID string    `json:"challengeId"`
+	Kind        string    `json:"kind"`
+	Isu         int64     `json:"isu"`
+	IssuedAt    time.Time `json:"issuedAt"`
+	Itmo        struct {
+		Sid              string    `json:"sid"`
+		ExpiresAt        time.Time `json:"expiresAt"`
+		RefreshToken     string    `json:"refreshToken"`
+		RefreshExpiresAt time.Time `json:"refreshExpiresAt"`
+	} `json:"itmo"`
 }
 
 func (Bundle) String() string   { return "Bundle[redacted]" }
@@ -130,7 +135,7 @@ func (t *Target) Open(sealed, challengeID, kind string, now time.Time) (Bundle, 
 		return b, ErrBundle
 	}
 	if json.Unmarshal(plain, &b) != nil || b.V != 1 || !strings.EqualFold(b.ChallengeID, challengeID) ||
-		b.Kind != kind || b.RefreshToken == "" || b.Isu <= 0 {
+		b.Kind != kind || b.Itmo.RefreshToken == "" || b.Itmo.Sid == "" || b.Isu <= 0 {
 		return Bundle{}, ErrBundle
 	}
 	if age := now.Sub(b.IssuedAt); age > maxBundleAge || age < -maxBundleAge {

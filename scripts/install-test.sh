@@ -10,7 +10,7 @@ export HOME IW_STATE_DIR="$HOME/state" IW_BACKEND_URL=http://127.0.0.1:9
 bin="$HOME/.local/bin/itmo-widgets-agent"
 fail() { echo "FAIL: $*" >&2; exit 1; }
 mkdir -p "$IW_STATE_DIR"
-echo iwa_test_fixture >"$IW_STATE_DIR/agent-token"
+echo iwc_test_fixture >"$IW_STATE_DIR/agent-token"
 
 out=$(sh "$installer" --version "$v" --no-service) || fail "install: $out"
 echo "$out"

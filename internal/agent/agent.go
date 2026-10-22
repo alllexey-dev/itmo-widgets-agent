@@ -7,10 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"time"
 
 	"github.com/alllexey-dev/itmo-widgets-agent/internal/backend"
@@ -34,8 +36,8 @@ const (
 	tokenWait      = 10 * time.Second
 )
 
-// ErrTokenRevoked: Backend answered 401, the token and the session were wiped (exit code 3).
-var ErrTokenRevoked = errors.New("токен агента отозван: токен и сессия ИТМО удалены, подключите агент заново (pair)")
+// ErrTokenRevoked: Backend answered 401; the ITMO session was logged out (best effort) and the files wiped (exit code 3).
+var ErrTokenRevoked = errors.New("агент отключён на сервере: токен и сессия ИТМО удалены, подключите агент заново (pair)")
 
 type Agent struct {
 	Files    state.Files
@@ -48,6 +50,7 @@ type Agent struct {
 	Now      func() time.Time
 	Sleep    func(context.Context, time.Duration) error
 
+	version string
 	// handle processes one event; tests replace it.
 	handle      func(context.Context, backend.Event) error
 	st          state.State
@@ -73,6 +76,7 @@ func Build(cfg config.Config, build backend.BuildInfo, log *slog.Logger, now fun
 		Log:      log,
 		Now:      now,
 		Sleep:    sleep,
+		version:  build.Version,
 	}
 	a.ITMO.Save = func(s state.Session) error {
 		m, err := a.Files.SaveSession(s)
@@ -87,12 +91,21 @@ func Build(cfg config.Config, build backend.BuildInfo, log *slog.Logger, now fun
 	return a
 }
 
-// PairFlow returns the pairing flow over the same clients.
+// scopeOf is the connection scope each feature needs.
+var scopeOf = map[string]string{"sport": "sport", "friends": "friends:read"}
+
+// PairFlow returns the pairing flow over the same clients; a new connection asks for the scopes of the features.
 func (a *Agent) PairFlow(name, version string, view pair.View) *pair.Flow {
 	u, _ := url.Parse(a.Backend.BaseURL)
+	var scopes []string
+	for _, f := range slices.Sorted(maps.Keys(a.Features)) {
+		if a.Features[f] {
+			scopes = append(scopes, scopeOf[f])
+		}
+	}
 	return &pair.Flow{
 		Backend: a.Backend, ITMO: a.ITMO, Files: a.Files, Origin: u.Scheme + "://" + u.Host,
-		Name: name, Version: version, View: view, Log: a.Log, Now: a.Now, Sleep: a.Sleep,
+		Name: name, Version: version, Scopes: scopes, View: view, Log: a.Log, Now: a.Now, Sleep: a.Sleep,
 	}
 }
 
@@ -111,15 +124,19 @@ func (a *Agent) Run(ctx context.Context) error {
 		a.Log.Warn("state.json unreadable, starting from the beginning", "err", err)
 	}
 	a.Log.Info("agent started", "cursor", a.st.Cursor)
+	a.checkSession(ctx)
+	if err := a.Backend.ReportStatus(ctx, a.itmoState(), a.version); err != nil {
+		a.Log.Warn("status report failed", "err", err)
+	}
 	var backoff time.Duration
 	for ctx.Err() == nil {
 		a.checkSession(ctx)
-		page, err := a.Backend.Events(ctx, a.st.Cursor, pollWait, a.sessionOK)
+		page, err := a.Backend.Events(ctx, a.st.Cursor, pollWait, a.itmoState())
 		if ctx.Err() != nil {
 			break
 		}
 		if err != nil {
-			if pause, stop := a.pollFailed(err, &backoff); stop != nil {
+			if pause, stop := a.pollFailed(ctx, err, &backoff); stop != nil {
 				return stop
 			} else if a.Sleep(ctx, pause) != nil {
 				break
@@ -174,17 +191,33 @@ func (a *Agent) waitToken(ctx context.Context) (string, error) {
 	}
 }
 
+// itmoState is the events and status parameter: "ok" while the session refreshes, "closed" after ITMO ended it,
+// "none" without one.
+func (a *Agent) itmoState() string {
+	switch {
+	case a.sessionOK:
+		return "ok"
+	case a.st.SessionClosedMtime != 0:
+		return "closed"
+	}
+	return "none"
+}
+
 // pollFailed decides the pause after a failed poll, or stops the agent on 401.
-func (a *Agent) pollFailed(err error, backoff *time.Duration) (time.Duration, error) {
+func (a *Agent) pollFailed(ctx context.Context, err error, backoff *time.Duration) (time.Duration, error) {
 	a.st.LastError = err.Error()
 	a.saveState()
 	switch status := backend.StatusOf(err); {
 	case status == http.StatusUnauthorized:
-		// Never call ITMO.ID here: the session is shared with the phone.
+		lctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), unpairTimeout)
+		defer cancel()
+		if lerr := a.endSession(lctx); lerr != nil {
+			a.Log.Warn("ending the ITMO session failed; the phone ends it", "err", lerr)
+		}
 		if werr := a.Files.Wipe(); werr != nil {
 			a.Log.Error("wiping token and session failed", "err", werr)
 		}
-		a.Log.Error("agent token revoked; token and ITMO session deleted")
+		a.Log.Error("connection revoked; ITMO session ended, token and session deleted")
 		return 0, ErrTokenRevoked
 	case status == http.StatusTooManyRequests:
 		a.Log.Warn("rate limited by backend")
@@ -254,7 +287,7 @@ func (a *Agent) checkSession(ctx context.Context) {
 	}
 }
 
-// closeSession: stop MyITMO calls, notify once, poll with itmo=none until a new session file appears.
+// closeSession: stop MyITMO calls, notify once, poll with itmo=closed until a new session file appears.
 func (a *Agent) closeSession(ctx context.Context) {
 	if !a.sessionOK {
 		return
@@ -264,8 +297,8 @@ func (a *Agent) closeSession(ctx context.Context) {
 	a.saveState()
 	a.sessionOK = false
 	a.ITMO.SetSession(nil)
-	a.Log.Warn("ITMO session closed; waiting for a new session (pair --session)")
-	if err := a.Notify.Send(ctx, "ITMO.Widgets", "Сессия ИТМО закрыта, переподключите с телефона: itmo-widgets-agent pair --session"); err != nil {
+	a.Log.Warn("ITMO session closed; waiting for a new session (renew)")
+	if err := a.Notify.Send(ctx, "ITMO.Widgets", "Вход агента в ИТМО закончился, обновите его: itmo-widgets-agent renew"); err != nil {
 		a.Log.Warn("notification failed", "err", err)
 	}
 }

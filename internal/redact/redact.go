@@ -6,10 +6,10 @@ import (
 	"strings"
 )
 
-// prefixes start secrets the agent handles: agent tokens and ITMO.ID JWTs (header and refresh token alike).
-var prefixes = []string{"iwa_", "eyJ"}
+// prefixes start secrets the agent handles: connection tokens and ITMO.ID JWTs (header and refresh token alike).
+var prefixes = []string{"iwc_", "eyJ"}
 
-// String masks every agent token or JWT in s.
+// String masks every connection token or JWT in s.
 func String(s string) string {
 	for _, p := range prefixes {
 		for from := 0; ; {
@@ -22,7 +22,7 @@ func String(s string) string {
 			for end < len(s) && isTokenByte(s[end]) {
 				end++
 			}
-			if end-start < 8 { // too short to be a token: "eyJ" in a word, "iwa_..." in help text
+			if end-start < 8 { // too short to be a token: "eyJ" in a word, "iwc_..." in help text
 				from = start
 				continue
 			}

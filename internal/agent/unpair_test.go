@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -17,17 +18,20 @@ func TestUnpair(t *testing.T) {
 		setup      func(h *harness)
 		wantServer bool
 		wantErr    bool
+		wantItmo   bool
 		wantText   string
 	}{
-		{name: "200 revokes on the server", wantServer: true, wantText: "сервер отозвал токен"},
-		{name: "401: already revoked", setup: func(h *harness) { h.b.Token = "iwa_other" }, wantServer: true},
-		{name: "404: an older backend", setup: func(h *harness) { h.b.SelfStatus, h.b.SelfCode = 404, "not_found" },
-			wantText: "удалите его в приложении"},
-		{name: "403 access_denied: an older backend's allow-list",
-			setup: func(h *harness) { h.b.SelfStatus, h.b.SelfCode = 403, "access_denied" }, wantText: "удалите его в приложении"},
+		{name: "200 revokes on the server", wantServer: true, wantText: "сервер отозвал подключение"},
+		{name: "401: already revoked", setup: func(h *harness) { h.b.Token = "iwc_other" }, wantServer: true},
 		{name: "503: a warning", setup: func(h *harness) { h.b.SelfStatus = 503 }, wantErr: true, wantText: "Внимание"},
 		{name: "network error: a warning", setup: func(h *harness) { h.b.Srv.Close() }, wantErr: true,
 			wantText: "доступ агента к серверу не закрыт"},
+		{name: "ITMO session already ended", wantServer: true, setup: func(h *harness) {
+			h.f.Set(func(f *fake.ITMO) { f.LogoutStatus, f.LogoutBody = 400, `{"error":"invalid_grant"}` })
+		}},
+		{name: "ITMO.ID down: a warning", wantServer: true, wantItmo: true, wantText: "не завершён", setup: func(h *harness) {
+			h.f.Set(func(f *fake.ITMO) { f.LogoutStatus = 503 })
+		}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -39,8 +43,8 @@ func TestUnpair(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if u.Server != tt.wantServer || (u.Err != nil) != tt.wantErr {
-				t.Fatalf("got %+v, want server %v, error %v", u, tt.wantServer, tt.wantErr)
+			if u.Server != tt.wantServer || (u.Err != nil) != tt.wantErr || (u.ItmoErr != nil) != tt.wantItmo {
+				t.Fatalf("got %+v, want server %v, error %v, itmo error %v", u, tt.wantServer, tt.wantErr, tt.wantItmo)
 			}
 			if !strings.Contains(u.Message(), tt.wantText) {
 				t.Fatalf("message %q lacks %q", u.Message(), tt.wantText)
@@ -53,8 +57,11 @@ func TestUnpair(t *testing.T) {
 			if strings.Contains(h.logs.String(), fake.AgentToken) || strings.Contains(u.Message(), fake.AgentToken) {
 				t.Fatal("the token leaked into a log or the message")
 			}
+			if got := h.f.LoggedOut(); !slices.Equal(got, []string{"SECRET-REFRESH-0"}) {
+				t.Fatalf("logged out %v, want the agent's own session", got)
+			}
 			if _, refreshes := h.f.Snapshot(); refreshes != 0 || h.f.MyCalls != 0 {
-				t.Fatal("ITMO was called while unpairing")
+				t.Fatal("My ITMO was called while unpairing")
 			}
 		})
 	}
