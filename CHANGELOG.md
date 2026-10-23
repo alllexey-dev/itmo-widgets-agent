@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
 
 Needs Backend with connected clients (`docs/contracts/connections.md`, itmo-widgets-backend PR #58) and an app
 with «Устройства». Not compatible with 0.1.x pairings: unpair the old agent and run `pair` again.
