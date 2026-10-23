@@ -81,7 +81,7 @@ jobs:
             state="$HOME/Library/Application Support/itmo-widgets-agent"
           fi
           mkdir -p "$state"
-          echo iwa_test_fixture > "$state/agent-token"
+          echo iwc_test_fixture > "$state/agent-token"
           echo IW_BACKEND_URL=http://127.0.0.1:9 > "$state/agent.env"
           sh install.sh --version v0.0.0-ci
           sleep 3
@@ -168,7 +168,7 @@ jobs:
 
             # The rc.d service for a normal user without sudo: the installer prints the root commands, root runs them.
             pw useradd agent -m -s /bin/sh
-            su -l agent -c "mkdir -p .config/itmo-widgets-agent && echo iwa_test_fixture > .config/itmo-widgets-agent/agent-token &&
+            su -l agent -c "mkdir -p .config/itmo-widgets-agent && echo iwc_test_fixture > .config/itmo-widgets-agent/agent-token &&
               echo IW_BACKEND_URL=http://127.0.0.1:9 > .config/itmo-widgets-agent/agent.env &&
               IW_RELEASE_BASE=$IW_RELEASE_BASE sh $PWD/install.sh --version v0.0.0-ci" > out.txt
             cat out.txt
@@ -190,7 +190,7 @@ jobs:
 
             # As root the installer runs the same commands itself; uninstall removes them.
             mkdir -p /root/.config/itmo-widgets-agent
-            echo iwa_test_fixture > /root/.config/itmo-widgets-agent/agent-token
+            echo iwc_test_fixture > /root/.config/itmo-widgets-agent/agent-token
             echo IW_BACKEND_URL=http://127.0.0.1:9 > /root/.config/itmo-widgets-agent/agent.env
             sh install.sh --version v0.0.0-ci
             sleep 3

@@ -1,11 +1,14 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"slices"
+	"strings"
 	"time"
 
+	"github.com/alllexey-dev/itmo-widgets-agent/internal/backend"
 	"github.com/alllexey-dev/itmo-widgets-agent/internal/state"
 )
 
@@ -27,7 +30,7 @@ type Report struct {
 	Cursor    int64        `json:"cursor"`
 	Session   SessionState `json:"session"`
 	Isu       int64        `json:"isu,omitempty"`
-	// Refreshed is the last ITMO.ID refresh; Expires is when the refresh token ends without one.
+	// Refreshed is the last ITMO.ID refresh; Expires is when the session ends at ITMO.ID, whatever the refreshes.
 	Refreshed time.Time `json:"refreshed"`
 	Expires   time.Time `json:"expires"`
 	// Events and Sport are newest first.
@@ -51,7 +54,7 @@ func ReadReport(files state.Files) (Report, error) {
 	case !ok:
 		r.Session = SessionNone
 	default:
-		r.Session, r.Isu, r.Refreshed, r.Expires = SessionOK, s.Isu, s.RefreshedAt, s.RefreshExpiresAt
+		r.Session, r.Isu, r.Refreshed, r.Expires = SessionOK, s.Isu, s.RefreshedAt, s.ExpiresAt
 		if st.SessionClosedMtime != 0 && m == st.SessionClosedMtime {
 			r.Session = SessionClosed
 		}
@@ -102,8 +105,28 @@ func QueueLabel(queue string) string {
 	return "своб. место"
 }
 
-// Status prints the state as plain text: a running agent's live state when there is one, else the files.
-func Status(files state.Files, live *Live, now time.Time, out io.Writer) error {
+// Server is what Backend says about this connection, for `status`; Err when it did not answer.
+type Server struct {
+	Me  backend.ClientMe
+	Err error
+}
+
+// Server asks Backend about this connection; nil without a token.
+func (a *Agent) Server(ctx context.Context) *Server {
+	token, err := a.Files.Token()
+	if err != nil {
+		return nil
+	}
+	// Short: the installers run status to see whether the agent is paired.
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	me, err := a.Backend.WithToken(token).Me(ctx)
+	return &Server{Me: me, Err: err}
+}
+
+// Status prints the state as plain text: a running agent's live state when there is one, else the files, and what
+// Backend says when server is not nil.
+func Status(files state.Files, live *Live, server *Server, now time.Time, out io.Writer) error {
 	var r Report
 	if live != nil {
 		r = live.Report
@@ -128,18 +151,35 @@ func Status(files state.Files, live *Live, now time.Time, out io.Writer) error {
 	}
 	session := map[SessionState]string{
 		SessionNone:    "нет (выполните pair)",
-		SessionClosed:  "закрыта ИТМО (выполните pair --session)",
-		SessionDamaged: "файл повреждён (выполните pair --session)",
+		SessionClosed:  "закрыта ИТМО (выполните renew)",
+		SessionDamaged: "файл повреждён (выполните renew)",
 	}[r.Session]
+	if r.Session == SessionNone && r.HasToken {
+		session = "нет (выполните renew)"
+	}
 	if r.Session == SessionOK {
 		session = fmt.Sprintf("есть (ISU %d, обновлена %s", r.Isu, ago(now, r.Refreshed))
 		if !r.Expires.IsZero() {
-			session += ", действует до " + r.Expires.Local().Format("02.01.2006 15:04")
+			session += ", действует до " + r.Expires.Local().Format("02.01.2006 15:04") + ", потом renew"
 		}
 		session += ")"
 	}
 	fmt.Fprintf(out, "Токен агента: %s\n", map[bool]string{true: "есть", false: "нет"}[r.HasToken])
 	fmt.Fprintf(out, "Сервер: %s, последний опрос %s\n", conn, ago(now, r.LastPoll))
+	switch {
+	case server == nil:
+	case server.Err != nil:
+		fmt.Fprintf(out, "Сервер сейчас: не ответил (%v)\n", server.Err)
+	default:
+		var granted []string
+		for _, g := range server.Me.Connection.Scopes {
+			if g.Granted {
+				granted = append(granted, g.Scope.Title)
+			}
+		}
+		fmt.Fprintf(out, "Подключение: агент «%s», ISU %d, доступ: %s\n", server.Me.Connection.Name, server.Me.Isu,
+			strings.Join(granted, ", "))
+	}
 	fmt.Fprintf(out, "Сессия ИТМО: %s\n", session)
 	fmt.Fprintf(out, "Курсор событий: %d\n", r.Cursor)
 	if r.LastError != "" {

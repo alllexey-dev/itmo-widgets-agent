@@ -10,7 +10,7 @@ import (
 )
 
 // Attach shows the status screen of the agent behind c, starting from its snapshot live, until q; the agent keeps
-// running. [s] pairs a new ITMO session right here, like `pair --session`, and [p] the agent itself when it has no
+// running. [s] gets a new ITMO session right here, like `renew`, and [p] pairs the agent itself when it has no
 // token; the agent picks up the new files. [u] asks the agent to unpair.
 func (a *App) Attach(ctx context.Context, c *control.Client, live agent.Live) (err error) {
 	if a.scr, err = openScreen(); err != nil {

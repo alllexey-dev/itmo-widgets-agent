@@ -1,7 +1,7 @@
 # Contributing
 
 The self-hosted ITMO.Widgets agent: one static Go binary that long-polls the ITMO.Widgets Backend and books queued
-sport lessons with the user's own My ITMO session. Keep it small: idle RSS under 15 MB, standard library first.
+sport lessons with its own ITMO.ID session, which the phone signs in for it at pairing. Keep it small: idle RSS under 15 MB, standard library first.
 
 ## Build and test
 
@@ -43,14 +43,14 @@ clock is injected.
 
 | Path | What |
 |---|---|
-| `cmd/itmo-widgets-agent` | CLI: `run`, `pair [--session]`, `login`, `status`, `attach`, `unpair`, `health`, `--ui`; exit codes |
-| `internal/agent` | the poll loop: cursor, dedup ids, backoff, 401 wipe, waiting for a token, ITMO session state, `unpair`, health and status; `Loop` tracks a running loop for the screen and the socket |
+| `cmd/itmo-widgets-agent` | CLI: `run`, `pair`, `renew`, `status`, `attach`, `unpair`, `health`, `--ui`; exit codes |
+| `internal/agent` | the poll loop: cursor, dedup ids, backoff, 401 logout and wipe, waiting for a token, ITMO session state (`itmo=ok\|closed\|none`), `unpair`, health and status; `Loop` tracks a running loop for the screen and the socket |
 | `internal/control` | the running agent's Unix socket for `attach` and `status`: line-delimited JSON, owner-only |
-| `internal/backend` | Backend client for the routes an agent token may call |
+| `internal/backend` | Backend client for the routes an agent connection may call (`/api/client/**`, pairing, sport reports) |
 | `internal/itmo` | minimal ITMO.ID and My ITMO client (see below) |
 | `internal/sport` | booking on `SPORT_*_SIGN_LESSONS_PAYLOAD` events |
-| `internal/pair` | pairing: HPKE key, commitment, SAS, QR and link, bundle checks, `login` |
-| `internal/state` | `agent-token`, `session.json`, `state.json`; atomic writes, mode 0600 |
+| `internal/pair` | pairing (`CONNECT`, `RENEW`): HPKE key, commitment, SAS, QR and link, claim, bundle checks |
+| `internal/state` | `agent-token` (the `iwc_` connection token), `session.json` (own ITMO session with `sid` and its end), `state.json`; atomic writes, mode 0600 |
 | `internal/budget` | per-host request ceiling in the HTTP transport (60 per hour to ITMO) |
 | `internal/notify` | ntfy notifications |
 | `internal/config` | environment and `agent.env` |
@@ -78,8 +78,8 @@ folder's ACL). One JSON object per line:
 - client to agent: `{"cmd":"unpair"}`. The agent stops the loop, unpairs, and starts the loop again, which waits for a
   new token.
 
-A new ITMO session or a new pairing is no command: `attach` runs the pairing screen itself, like `pair --session`
-next to a running service, and the agent picks up the new files. Live holds no secret, and every outgoing line also
+A new ITMO session or a new pairing is no command: `attach` runs the pairing screen itself, like `renew` next to a
+running service, and the agent picks up the new files. Live holds no secret, and every outgoing line also
 passes `redact.String`. On start a socket nobody answers on is a leftover and is replaced; one that answers means
 another agent runs with this directory and `run` exits. Closing the listener removes the file. Cost, measured on
 2026-10-14 (stripped): +66 KB on darwin/arm64, +68 KB on linux/amd64 and windows/amd64, +128 KB on linux/arm64
@@ -87,30 +87,38 @@ another agent runs with this directory and `run` exits. Closing the listener rem
 
 ## Contracts
 
-- Backend: `docs/contracts/agent.md` and `docs/contracts/pairing.md` in
+- Backend: `docs/contracts/connections.md` in
   [itmo-widgets-backend](https://github.com/alllexey-dev/itmo-widgets-backend). Event payloads are the push payloads
-  of `docs/contracts/notifications.md`.
-- Pairing cryptography (HPKE suite, `info`, commitment, SAS, bundle) follows the ITMO.Widgets session hand-off design;
-  `internal/pair/pair_test.go` holds an independent sender that must keep passing.
+  of `docs/contracts/notifications.md`. The design is ITMO.Widgets `vibe/plans/connected-clients-plan.md`.
+- Pairing cryptography (HPKE suite, `info`, commitment, SAS, link) is the app's `PairingCrypto` byte for byte, from
+  the ITMO.Widgets session hand-off design: `info` ends with `0x00 || s` and the link fragment starts with `v1.`,
+  which the contract's summary leaves out. `internal/pair/pair_test.go` holds an independent sender that must keep
+  passing.
+- The phone picks the label of the agent's ITMO.ID session (`/activity` on id.itmo.ru) from the challenge's
+  `platform` and its own «Выглядеть как обычный браузер» switch. The agent never signs in to ITMO.ID itself, so it
+  has no label setting of its own; its User-Agent on refresh does not change the label.
 
 ## The ITMO client exception
 
 In the ITMO.Widgets ecosystem [MyItmoApi](https://github.com/alllexey123/MyItmoApi) is the only client for official
 ITMO endpoints. The agent is an approved exception, because MyItmoApi targets only the JVM and iOS. `internal/itmo`
-implements exactly three calls and nothing else:
+implements exactly four calls and nothing else:
 
 - ITMO.ID token refresh (`refresh_token` grant, client `student-personal-cabinet`, plural `scopes`);
+- ITMO.ID logout of its own session (OIDC logout with its refresh token, client `student-personal-cabinet`), on
+  `unpair`, on a Backend 401, after `renew` for the replaced session and for a pairing that failed its checks;
 - `GET /api/sport/sign/chosen`;
 - `POST /api/sport/sign/schedule/lessons`.
 
 MyItmoApi stays the reference: when a wire detail changes, change it there first and mirror it here (envelope
-`error_code`/`code`, 401 handling, the sign-up outcome mapping of `SportSignResult`). A new ITMO call needs the owner's
-decision.
+`error_code`/`code`, 401 handling, the sign-up outcome mapping of `SportSignResult`, `ItmoIdClient.logout`). A new
+ITMO call needs the owner's decision.
 
 ## Rules
 
-- Never log tokens, refresh tokens, pairing secrets, names or lesson titles. `TestLogsNeverContainTokens` guards it.
-- Never call ITMO.ID logout or revoke: the session is shared with the phone.
+- Never log tokens, refresh tokens, claim or pairing secrets, `sid`s, names or lesson titles.
+  `TestLogsNeverContainTokens` guards it.
+- Log out only the agent's own ITMO session; never touch the phone's or any other.
 - No polling of My ITMO on a timer except the daily token keep-alive; act only on Backend events.
 - Commit messages: one short line.
 

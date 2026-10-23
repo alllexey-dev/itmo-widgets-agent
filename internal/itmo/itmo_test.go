@@ -66,7 +66,8 @@ func TestRefresh(t *testing.T) {
 			c := newClient(f)
 			var saved []state.Session
 			c.Save = func(s state.Session) error { saved = append(saved, s); return nil }
-			c.SetSession(&state.Session{Isu: 1, RefreshToken: "R0"})
+			end := fake.Now.Add(90 * 24 * time.Hour)
+			c.SetSession(&state.Session{Isu: 1, Sid: "sid-1", ExpiresAt: end, RefreshToken: "R0"})
 			err := c.Refresh(context.Background())
 			switch {
 			case tt.wantClosed:
@@ -83,12 +84,40 @@ func TestRefresh(t *testing.T) {
 				}
 				s := c.Session()
 				if s.RefreshToken != "SECRET-REFRESH-1" || s.AccessToken != "SECRET-ACCESS-1" || s.Isu != 1 ||
+					s.Sid != "sid-1" || !s.ExpiresAt.Equal(end) ||
 					!s.AccessExpiresAt.Equal(fake.Now.Add(30*time.Minute)) || len(saved) != 1 {
 					t.Fatalf("session not rotated and saved: %d saves", len(saved))
 				}
 			}
 			if (tt.wantClosed || tt.wantErr) && len(saved) != 0 {
 				t.Fatal("a failed refresh saved a session")
+			}
+		})
+	}
+}
+
+func TestLogout(t *testing.T) {
+	tests := []struct {
+		name    string
+		status  int
+		body    string
+		wantErr bool
+	}{
+		{name: "204 ends the session"},
+		{name: "an OAuth error: already ended", status: 400, body: `{"error":"invalid_grant","error_description":"Session not active"}`},
+		{name: "5xx is an error", status: 503, body: `{"error":"temporarily_unavailable"}`, wantErr: true},
+		{name: "non-JSON 4xx is an error", status: 403, body: `<html>`, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := fake.NewITMO(t)
+			f.LogoutStatus, f.LogoutBody = tt.status, tt.body
+			err := newClient(f).Logout(context.Background(), "SECRET-R")
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err %v, want error %v", err, tt.wantErr)
+			}
+			if got := f.LoggedOut(); len(got) != 1 || got[0] != "SECRET-R" {
+				t.Fatalf("logged out %v", got)
 			}
 		})
 	}

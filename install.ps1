@@ -161,7 +161,7 @@ function Invoke-Unpair {
     if (-not (Test-Path $Exe)) { throw 'агент не установлен' }
     if (-not (Confirm-Action 'Отключить агента от аккаунта? Токен и сессия ИТМО будут удалены с этого компьютера.')) { return }
     & $Exe unpair
-    if ($LASTEXITCODE) { throw 'unpair не удался: удалите агент в приложении, Профиль -> «Подключённые устройства»' }
+    if ($LASTEXITCODE) { throw 'unpair не удался: удалите агент в приложении, Профиль -> «Устройства»' }
 }
 
 function Invoke-Uninstall {
@@ -171,7 +171,7 @@ function Invoke-Uninstall {
     if (Test-Path $Exe) {
         $stateDir = (& $Exe status) -match '^Папка: ' -replace '^Папка: '
         & $Exe unpair
-        if ($LASTEXITCODE) { Write-Host 'unpair не удался: удалите агент в приложении, Профиль -> «Подключённые устройства»' -ForegroundColor Yellow }
+        if ($LASTEXITCODE) { Write-Host 'unpair не удался: удалите агент в приложении, Профиль -> «Устройства»' -ForegroundColor Yellow }
     }
     Remove-Item -Recurse -Force $Dir -ErrorAction SilentlyContinue
     Write-Host 'Агент удалён: программа, служба, токен и сессия ИТМО.' -ForegroundColor Green

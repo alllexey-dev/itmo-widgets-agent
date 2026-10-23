@@ -164,7 +164,7 @@ func TestSnapshotThenUpdatesWithoutSecrets(t *testing.T) {
 			t.Fatalf("stream contains %q: %s", secret, stream.String())
 		}
 	}
-	if !strings.Contains(stream.String(), "iwa_[redacted]") {
+	if !strings.Contains(stream.String(), "iwc_[redacted]") {
 		t.Fatalf("the planted token did not reach the stream masked: %s", stream.String())
 	}
 }
@@ -203,7 +203,7 @@ func TestUnpairCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := next(t, c, func(m Message) bool { return m.Reply != nil })
-	if m.Reply.Cmd != CmdUnpair || m.Reply.Error != "" || !strings.Contains(m.Reply.Message, "сервер отозвал токен") || r.b.SelfRevokes != 1 {
+	if m.Reply.Cmd != CmdUnpair || m.Reply.Error != "" || !strings.Contains(m.Reply.Message, "сервер отозвал подключение") || r.b.SelfRevokes != 1 {
 		t.Fatalf("unpair reply %+v, revokes %d", m.Reply, r.b.SelfRevokes)
 	}
 	if _, err := r.loop.Agent.Files.Token(); !os.IsNotExist(err) {

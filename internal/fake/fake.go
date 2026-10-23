@@ -38,9 +38,9 @@ func (c *Clock) Add(d time.Duration) {
 	c.mu.Unlock()
 }
 
-const AgentToken = "iwa_SECRET-AGENT-TOKEN-0123456789abcdefghijklmnopq"
+const AgentToken = "iwc_SECRET-AGENT-TOKEN-0123456789abcdefghijklmnopq"
 
-// Response is one scripted answer to GET /api/agent/events.
+// Response is one scripted answer to GET /api/client/events.
 type Response struct {
 	Status int
 	Code   string
@@ -63,14 +63,17 @@ type Backend struct {
 	Afters       []string
 	Reports      []string
 	Syncs        [][]int64
-	Created      []map[string]string
-	// SelfStatus, SelfCode answer DELETE /api/agent/self when set; otherwise the token is revoked and later calls get 401.
+	// Statuses are the PUT /api/client/status bodies.
+	Statuses []map[string]string
+	// Created are the bodies of POST /api/pair/challenges and /api/client/pair/renew.
+	Created []map[string]any
+	// SelfStatus, SelfCode answer DELETE /api/client/self when set; otherwise the token is revoked and later calls get 401.
 	SelfStatus  int
 	SelfCode    string
 	SelfRevokes int
-	// Poll answers GET /api/pair/challenges/{id}; n counts polls from 1.
-	Poll  func(n int) (int, string)
-	polls int
+	// Claim answers POST /api/pair/challenges/{id}/claim with the right claim secret; n counts claims from 1.
+	Claim  func(n int) (int, string)
+	claims int
 }
 
 const ChallengeID = "0f8fad5b-d9cb-469f-a165-70867728950e"
@@ -96,7 +99,7 @@ func (b *Backend) serve(w http.ResponseWriter, r *http.Request) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	p := r.URL.Path
-	anonymous := p == "/api/pair/challenges" || strings.HasPrefix(p, "/api/pair/challenges/")
+	anonymous := strings.HasPrefix(p, "/api/pair/challenges")
 	if !anonymous && r.Header.Get("Authorization") != "Bearer "+b.Token {
 		fail(w, 401, "unauthorized")
 		return
@@ -104,7 +107,7 @@ func (b *Backend) serve(w http.ResponseWriter, r *http.Request) {
 	body, _ := io.ReadAll(r.Body)
 	parts := strings.Split(strings.Trim(p, "/"), "/")
 	switch {
-	case p == "/api/agent/events":
+	case p == "/api/client/events":
 		q := r.URL.Query()
 		b.ItmoParams = append(b.ItmoParams, q.Get("itmo"))
 		b.Afters = append(b.Afters, q.Get("after"))
@@ -131,7 +134,7 @@ func (b *Backend) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		data, _ := json.Marshal(resp.Page)
 		ok(w, string(data))
-	case p == "/api/agent/self" && r.Method == http.MethodDelete:
+	case p == "/api/client/self" && r.Method == http.MethodDelete:
 		if b.SelfStatus != 0 {
 			fail(w, b.SelfStatus, b.SelfCode)
 			return
@@ -139,8 +142,15 @@ func (b *Backend) serve(w http.ResponseWriter, r *http.Request) {
 		b.SelfRevokes++
 		b.Token = ""
 		ok(w, `{}`)
-	case p == "/api/agent/me":
-		ok(w, fmt.Sprintf(`{"isu":%d,"tokenId":"t1","name":"nas","scopes":["sport"]}`, b.Isu))
+	case p == "/api/client/me":
+		ok(w, fmt.Sprintf(`{"isu":%d,"connection":{"id":"c1","client":"agent","name":"nas","itmoStatus":"ok","scopes":[`+
+			`{"scope":{"id":"sport","title":"Запись на физкультуру","description":"d"},"granted":true},`+
+			`{"scope":{"id":"friends:read","title":"Друзья","description":"d"},"granted":false}]}}`, b.Isu))
+	case p == "/api/client/status" && r.Method == http.MethodPut:
+		var req map[string]string
+		_ = json.Unmarshal(body, &req)
+		b.Statuses = append(b.Statuses, req)
+		ok(w, `{}`)
 	case len(parts) == 5 && parts[1] == "sport" && parts[3] == "entry" && parts[4] == "my":
 		queue := strings.TrimSuffix(parts[2], "-sign")
 		data := b.Entries[queue]
@@ -156,23 +166,30 @@ func (b *Backend) serve(w http.ResponseWriter, r *http.Request) {
 		_ = json.Unmarshal(body, &ids)
 		b.Syncs = append(b.Syncs, ids)
 		ok(w, `"ok"`)
-	case p == "/api/pair/challenges" || p == "/api/agent/pair/session":
-		var req map[string]string
+	case p == "/api/pair/challenges" || p == "/api/client/pair/renew":
+		var req map[string]any
 		_ = json.Unmarshal(body, &req)
 		b.Created = append(b.Created, req)
-		ok(w, `{"id":"`+ChallengeID+`","code":"ABCD2345","pollSecret":"poll-secret","expiresAt":"2026-10-07T06:02:00Z"}`)
-	case strings.HasPrefix(p, "/api/pair/challenges/"):
-		if r.Header.Get("X-Poll-Secret") != "poll-secret" || b.Poll == nil {
+		ok(w, `{"challengeId":"`+ChallengeID+`","code":"ABCD2345","claimSecret":"claim-secret","expiresAt":"2026-10-07T06:02:00Z"}`)
+	case p == "/api/pair/challenges/"+ChallengeID+"/claim" && r.Method == http.MethodPost:
+		var req map[string]string
+		_ = json.Unmarshal(body, &req)
+		if req["claimSecret"] != "claim-secret" || r.Header.Get("Authorization") != "" || b.Claim == nil {
 			fail(w, 404, "not_found")
 			return
 		}
-		b.polls++
-		status, data := b.Poll(b.polls)
-		if status != 200 {
+		b.claims++
+		status, data := b.Claim(b.claims)
+		switch status {
+		case 200, 202:
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(status)
+			fmt.Fprintf(w, `{"success":true,"data":%s,"error":null}`, data)
+		case 404:
+			fail(w, status, "not_found")
+		default:
 			fail(w, status, "rate_limited")
-			return
 		}
-		ok(w, data)
 	default:
 		fail(w, 403, "access_denied")
 	}
@@ -195,7 +212,11 @@ type ITMO struct {
 	TokenBody     string
 	Refreshes     int
 	RefreshTokens []string
-	Chosen        []int64
+	// LogoutStatus and LogoutBody override the logout answer; zero means 204. Logouts are the refresh tokens logged out.
+	LogoutStatus int
+	LogoutBody   string
+	Logouts      []string
+	Chosen       []int64
 	// MyStatus forces an HTTP status on every My ITMO call, MyStatusOnce on the next one only.
 	MyStatus     int
 	MyStatusOnce int
@@ -218,6 +239,22 @@ func (f *ITMO) serve(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
+	if r.URL.Path == "/logout" {
+		_ = r.ParseForm()
+		if r.PostForm.Get("client_id") != "student-personal-cabinet" || r.PostForm.Get("refresh_token") == "" {
+			w.WriteHeader(400)
+			fmt.Fprint(w, `{"error":"invalid_request"}`)
+			return
+		}
+		f.Logouts = append(f.Logouts, r.PostForm.Get("refresh_token"))
+		if f.LogoutStatus != 0 {
+			w.WriteHeader(f.LogoutStatus)
+			fmt.Fprint(w, f.LogoutBody)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	if r.URL.Path == "/token" {
 		_ = r.ParseForm()
 		f.Refreshes++
@@ -275,6 +312,13 @@ func (f *ITMO) serve(w http.ResponseWriter, r *http.Request) {
 	default:
 		w.WriteHeader(404)
 	}
+}
+
+// LoggedOut returns the refresh tokens logged out.
+func (f *ITMO) LoggedOut() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.Logouts...)
 }
 
 // Snapshot returns sign-ins and refresh count.

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -75,7 +76,7 @@ func newHarness(t *testing.T, withSession bool) *harness {
 }
 
 func (h *harness) saveSession(t *testing.T, access string, mtimeShift time.Duration) {
-	s := state.Session{Isu: 100001, RefreshToken: "SECRET-REFRESH-0", RefreshExpiresAt: fake.Now.Add(30 * 24 * time.Hour),
+	s := state.Session{Isu: 100001, Sid: "sid-0", RefreshToken: "SECRET-REFRESH-0", RefreshExpiresAt: fake.Now.Add(30 * 24 * time.Hour),
 		AccessToken: access, AccessExpiresAt: h.clock.Now().Add(20 * time.Minute), RefreshedAt: h.clock.Now()}
 	if _, err := h.a.Files.SaveSession(s); err != nil {
 		t.Fatal(err)
@@ -186,7 +187,28 @@ func TestTokenRevokedWipesFiles(t *testing.T) {
 		}
 	}
 	if _, refreshes := h.f.Snapshot(); refreshes != 0 || h.f.MyCalls != 0 {
-		t.Fatal("ITMO was called after a 401")
+		t.Fatal("My ITMO was called after a 401")
+	}
+	if got := h.f.LoggedOut(); !slices.Equal(got, []string{"SECRET-REFRESH-0"}) {
+		t.Fatalf("the agent's own ITMO session not ended: %v", got)
+	}
+}
+
+func TestRevokedAlphaSessionIsNotLoggedOut(t *testing.T) {
+	h := newHarness(t, false)
+	// A 0.1.x session.json: the phone's own session, no sid.
+	if _, err := h.a.Files.SaveSession(state.Session{Isu: 100001, RefreshToken: "SECRET-PHONE"}); err != nil {
+		t.Fatal(err)
+	}
+	h.b.Responses = []fake.Response{{Status: 401, Code: "unauthorized"}}
+	if err := h.a.Run(h.ctx); !errors.Is(err, ErrTokenRevoked) {
+		t.Fatalf("want ErrTokenRevoked, got %v", err)
+	}
+	if got := h.f.LoggedOut(); len(got) != 0 {
+		t.Fatalf("logged out the phone's session: %v", got)
+	}
+	if _, _, ok, _ := h.a.Files.Session(); ok {
+		t.Fatal("session not wiped")
 	}
 }
 
@@ -253,18 +275,21 @@ func TestSessionClosed(t *testing.T) {
 	polls := 0
 	h.b.BeforeEvents = func(string) {
 		if polls++; polls == 3 {
-			h.saveSession(t, "SECRET-ACCESS-NEW", time.Hour) // pair --session wrote a new file
+			h.saveSession(t, "SECRET-ACCESS-NEW", time.Hour) // renew wrote a new file
 		}
 	}
 	h.b.Responses = []fake.Response{page(1, sportEvent(1, "e1", 9001)), page(2, sportEvent(2, "e2", 9001)), page(2)}
 	if err := h.a.Run(h.ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, itmo := h.b.Calls(); !slices.Equal(itmo, []string{"ok", "none", "none", "ok"}) {
+	if _, _, itmo := h.b.Calls(); !slices.Equal(itmo, []string{"ok", "closed", "closed", "ok"}) {
 		t.Fatalf("itmo params %v", itmo)
 	}
+	if want := []map[string]string{{"itmo": "ok", "version": "test"}}; !reflect.DeepEqual(h.b.Statuses, want) {
+		t.Fatalf("status reports %v, want %v", h.b.Statuses, want)
+	}
 	notes := h.n.All()
-	if len(notes) != 1 || !strings.Contains(notes[0], "Сессия ИТМО закрыта") {
+	if len(notes) != 1 || !strings.Contains(notes[0], "itmo-widgets-agent renew") {
 		t.Fatalf("notifications %q", notes)
 	}
 	signIns, refreshes := h.f.Snapshot()
@@ -289,7 +314,7 @@ func TestSessionStaysClosedAcrossRestart(t *testing.T) {
 	if err := h.a.Run(h.ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, itmo := h.b.Calls(); itmo[0] != "none" {
+	if _, _, itmo := h.b.Calls(); itmo[0] != "closed" || h.b.Statuses[0]["itmo"] != "closed" {
 		t.Fatalf("itmo params %v", itmo)
 	}
 }
@@ -329,7 +354,7 @@ func TestLogsNeverContainTokens(t *testing.T) {
 		t.Fatal(err)
 	}
 	var status strings.Builder
-	Status(h.a.Files, nil, fake.Now, &status)
+	Status(h.a.Files, nil, nil, fake.Now, &status)
 	logs := h.logs.String() + status.String()
 	if signIns, refreshes := h.f.Snapshot(); len(signIns) != 1 || refreshes != 1 {
 		t.Fatalf("scenario did not book with a refresh: %v %d", signIns, refreshes)
@@ -337,7 +362,7 @@ func TestLogsNeverContainTokens(t *testing.T) {
 	if n := h.n.All(); len(n) != 2 || !strings.Contains(n[1], "Друг Первый") {
 		t.Fatalf("notifications %q", n)
 	}
-	for _, secret := range []string{"SECRET", fake.AgentToken, "iwa_", "Друг", "Плавание"} {
+	for _, secret := range []string{"SECRET", fake.AgentToken, "iwc_", "Друг", "Плавание"} {
 		if strings.Contains(logs, secret) {
 			t.Fatalf("logs contain %q:\n%s", secret, logs)
 		}
@@ -348,17 +373,17 @@ func TestStatusShowsHistory(t *testing.T) {
 	files := state.Files{Dir: t.TempDir()}
 	files.TokenPath = filepath.Join(files.Dir, "agent-token")
 	files.SaveToken(fake.AgentToken)
-	files.SaveSession(state.Session{Isu: 100001, RefreshToken: "SECRET-R", RefreshedAt: fake.Now,
-		RefreshExpiresAt: fake.Now.Add(30 * 24 * time.Hour)})
+	files.SaveSession(state.Session{Isu: 100001, Sid: "sid-1", ExpiresAt: time.Date(2027, 1, 5, 6, 0, 0, 0, time.UTC),
+		RefreshToken: "SECRET-R", RefreshedAt: fake.Now, RefreshExpiresAt: fake.Now.Add(30 * 24 * time.Hour)})
 	st := state.State{LastPollAt: fake.Now.Add(-time.Minute)}
 	st.AddEvent(state.EventRecord{At: fake.Now, Seq: 4, Type: "SPORT_AUTO_SIGN_LESSONS_PAYLOAD"})
 	st.AddSport(state.SportAttempt{At: fake.Now, Queue: "auto", LessonID: 9001, Start: fake.Now, Outcome: "NO_CAPACITY"})
 	files.SaveState(st)
 	var out strings.Builder
-	if err := Status(files, nil, fake.Now, &out); err != nil {
+	if err := Status(files, nil, nil, fake.Now, &out); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"на связи", "ISU 100001", "действует до", "автозапись", "занятие 9001", "мест нет"} {
+	for _, want := range []string{"на связи", "ISU 100001", "действует до 05.01.2027", "автозапись", "занятие 9001", "мест нет"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("status lacks %q:\n%s", want, out.String())
 		}
@@ -372,12 +397,29 @@ func TestStatusPrefersTheRunningAgent(t *testing.T) {
 	files := state.Files{Dir: t.TempDir()}
 	live := &Live{Report: Report{HasToken: true, Cursor: 42}, Running: true, Started: fake.Now, Log: []string{"msg=\"agent started\""}}
 	var out strings.Builder
-	if err := Status(files, live, fake.Now, &out); err != nil {
+	if err := Status(files, live, nil, fake.Now, &out); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"Запущен: да", "attach", "Курсор событий: 42", "Журнал:", "agent started"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("status lacks %q:\n%s", want, out.String())
 		}
+	}
+}
+
+func TestStatusAsksTheServer(t *testing.T) {
+	h := newHarness(t, true)
+	var out strings.Builder
+	if err := Status(h.a.Files, nil, h.a.Server(h.ctx), fake.Now, &out); err != nil {
+		t.Fatal(err)
+	}
+	if want := "Подключение: агент «nas», ISU 100001, доступ: Запись на физкультуру\n"; !strings.Contains(out.String(), want) {
+		t.Fatalf("status lacks %q:\n%s", want, out.String())
+	}
+	h.b.Srv.Close()
+	out.Reset()
+	Status(h.a.Files, nil, h.a.Server(h.ctx), fake.Now, &out)
+	if !strings.Contains(out.String(), "Сервер сейчас: не ответил") || strings.Contains(out.String(), fake.AgentToken) {
+		t.Fatalf("status with the server down:\n%s", out.String())
 	}
 }

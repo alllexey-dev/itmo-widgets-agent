@@ -30,13 +30,13 @@ type App struct {
 	notice string
 }
 
-// Pair is `pair` on a terminal: the pairing screen until it succeeds or the user quits.
-func (a *App) Pair(ctx context.Context, sessionOnly bool) (isu int64, err error) {
+// Pair is `pair` (or `renew`) on a terminal: the pairing screen until it succeeds or the user quits.
+func (a *App) Pair(ctx context.Context, renew bool) (isu int64, err error) {
 	if a.scr, err = openScreen(); err != nil {
 		return 0, err
 	}
 	defer a.scr.close()
-	return a.pair(ctx, sessionOnly)
+	return a.pair(ctx, renew)
 }
 
 // Run is `run` on a terminal: pairing when there is no token, then the agent with the status screen.
@@ -93,13 +93,13 @@ func (v *pairView) Opened(sas string) { v.set(func() { v.sas = sas }) }
 func (v *pairView) Paired(isu int64)  { v.set(func() { v.isu = isu }) }
 
 // pair shows the pairing screen; on a failure it offers another try.
-func (a *App) pair(ctx context.Context, sessionOnly bool) (int64, error) {
+func (a *App) pair(ctx context.Context, renew bool) (int64, error) {
 	for {
-		isu, err := a.pairOnce(ctx, sessionOnly)
+		isu, err := a.pairOnce(ctx, renew)
 		if err == nil || errors.Is(err, ErrCancelled) || ctx.Err() != nil {
 			return isu, err
 		}
-		a.scr.draw(a.pairFrame(&pairView{}, sessionOnly, err, 0))
+		a.scr.draw(a.pairFrame(&pairView{}, renew, err, 0))
 		if !a.waitKey(ctx, 'p') {
 			return 0, err
 		}
@@ -120,18 +120,18 @@ func (a *App) waitKey(ctx context.Context, yes rune) bool {
 	}
 }
 
-func (a *App) pairOnce(ctx context.Context, sessionOnly bool) (int64, error) {
+func (a *App) pairOnce(ctx context.Context, renew bool) (int64, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	v := &pairView{changed: make(chan struct{}, 1)}
 	// Own clients: the agent loop may run next to this flow.
 	flow := agent.Build(a.Cfg, a.Build, a.Log, a.Now).PairFlow(a.Cfg.Name, a.Build.Version, v)
 	done := make(chan error, 1)
-	go func() { done <- flow.Pair(ctx, sessionOnly) }()
+	go func() { done <- flow.Pair(ctx, renew) }()
 	tick := time.NewTicker(500 * time.Millisecond)
 	defer tick.Stop()
 	for frame := 0; ; frame++ {
-		a.scr.draw(a.pairFrame(v, sessionOnly, nil, frame))
+		a.scr.draw(a.pairFrame(v, renew, nil, frame))
 		select {
 		case err := <-done:
 			v.mu.Lock()
@@ -154,12 +154,12 @@ func (a *App) pairOnce(ctx context.Context, sessionOnly bool) (int64, error) {
 
 var spinner = []string{"◐", "◓", "◑", "◒"}
 
-func (a *App) pairFrame(v *pairView, sessionOnly bool, failed error, frame int) string {
+func (a *App) pairFrame(v *pairView, renew bool, failed error, frame int) string {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	title := "Подключение агента"
-	if sessionOnly {
-		title = "Новая сессия ИТМО"
+	title, where := "Подключение агента", "Профиль -> «Устройства» -> «Подключить устройство»"
+	if renew {
+		title, where = "Обновление входа в ИТМО", "Профиль -> «Устройства» -> агент -> «Обновить вход»"
 	}
 	var b strings.Builder
 	b.WriteString(a.header(title))
@@ -179,10 +179,10 @@ func (a *App) pairFrame(v *pairView, sessionOnly bool, failed error, frame int) 
 	case v.sas != "":
 		b.WriteString("Телефон открыл ссылку. Код проверки:\n\n")
 		b.WriteString("    " + bold(cyan(v.sas)) + "\n\n")
-		b.WriteString("Сверьте его с экраном телефона и нажмите там «Подключить».\n")
+		b.WriteString("Сверьте его с экраном телефона и войдите там в ИТМО.\n")
 		b.WriteString(spinner[frame%len(spinner)] + " Ждём подтверждения…\n")
 	default:
-		b.WriteString("На телефоне: ITMO.Widgets -> Профиль -> «Подключить устройство»,\nотсканируйте QR или вставьте ссылку.\n\n")
+		b.WriteString("На телефоне: ITMO.Widgets -> " + where + ",\nотсканируйте QR или вставьте ссылку.\n\n")
 		var qr strings.Builder
 		if pair.WriteQR(&qr, v.link) == nil {
 			b.WriteString(qr.String())
@@ -271,11 +271,11 @@ func (a *App) status(ctx context.Context, loop *agent.Loop) (bool, error) {
 	}
 }
 
-// newSession is [s]: the pairing screen for a new ITMO session; the agent loop picks up the new session.json.
+// newSession is [s], `renew` on the screen: the agent loop picks up the new session.json.
 func (a *App) newSession(ctx context.Context) {
 	a.notice = ""
 	if _, err := a.pair(ctx, true); err == nil {
-		a.notice = "Новая сессия ИТМО сохранена."
+		a.notice = "Вход в ИТМО обновлён."
 	}
 }
 
@@ -296,7 +296,7 @@ func (a *App) statusFrame(l agent.Live, confirm, attached bool) string {
 	conn := green("● на связи")
 	switch {
 	case l.Revoked:
-		conn = red("● отключено") + dim(": сервер отозвал токен агента")
+		conn = red("● отключено") + dim(": сервер отозвал подключение")
 	case !l.Running && l.Stopped != "":
 		conn = red("● остановлен: " + l.Stopped)
 	case !l.Running:
@@ -370,10 +370,10 @@ func (a *App) statusFrame(l agent.Live, confirm, attached bool) string {
 	case !r.HasToken:
 		b.WriteString(dim("[p] подключить   " + quit))
 	case confirm:
-		b.WriteString(yellow("Отключить агент? Сервер отзовёт токен, токен и сессия ИТМО будут удалены с этой машины.") + "\n" +
+		b.WriteString(yellow("Отключить агент? Его вход в ИТМО завершится, сервер отзовёт подключение, токен и сессия будут удалены с этой машины.") + "\n" +
 			dim("[y] да   любая клавиша - нет"))
 	default:
-		b.WriteString(dim("[s] новая сессия ИТМО   [u] отключить   " + quit))
+		b.WriteString(dim("[s] обновить вход в ИТМО   [u] отключить   " + quit))
 	}
 	return b.String()
 }

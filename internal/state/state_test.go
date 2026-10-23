@@ -13,7 +13,7 @@ import (
 func TestFilesRoundTripWithPrivateModes(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "new")
 	f := Files{Dir: dir, TokenPath: filepath.Join(dir, "agent-token")}
-	if err := f.SaveToken("iwa_test"); err != nil {
+	if err := f.SaveToken("iwc_test"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.SaveSession(Session{Isu: 1, RefreshToken: "r"}); err != nil {
@@ -30,7 +30,7 @@ func TestFilesRoundTripWithPrivateModes(t *testing.T) {
 	if fi, _ := os.Stat(dir); fi.Mode().Perm() != 0o700 {
 		t.Fatalf("dir mode %v", fi.Mode())
 	}
-	if tok, _ := f.Token(); tok != "iwa_test" {
+	if tok, _ := f.Token(); tok != "iwc_test" {
 		t.Fatalf("token %q", tok)
 	}
 	if s, _, ok, err := f.Session(); !ok || err != nil || s.Isu != 1 {

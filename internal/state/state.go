@@ -1,4 +1,4 @@
-// Package state keeps the agent's files: the agent token, the ITMO session and the poll state.
+// Package state keeps the agent's files: the connection token, the ITMO session and the poll state.
 package state
 
 import (
@@ -27,9 +27,13 @@ type Files struct {
 func (f Files) SessionPath() string { return filepath.Join(f.Dir, "session.json") }
 func (f Files) StatePath() string   { return filepath.Join(f.Dir, "state.json") }
 
-// Session is the ITMO.ID session. It is secret: String and LogValue never print it.
+// Session is the agent's own ITMO.ID session. It is secret: String and LogValue never print it.
 type Session struct {
-	Isu              int64     `json:"isu"`
+	Isu int64 `json:"isu"`
+	// Sid and ExpiresAt name the session at ITMO.ID: it ends at ExpiresAt, 90 days after the sign-in on the phone,
+	// however often it refreshes.
+	Sid              string    `json:"sid"`
+	ExpiresAt        time.Time `json:"expiresAt"`
 	RefreshToken     string    `json:"refreshToken"`
 	RefreshExpiresAt time.Time `json:"refreshExpiresAt"`
 	AccessToken      string    `json:"accessToken,omitempty"`
@@ -120,7 +124,7 @@ func (f Files) Token() (string, error) {
 	}
 	t := strings.TrimSpace(string(b))
 	if t == "" {
-		return "", errors.New("agent token file is empty")
+		return "", errors.New("connection token file is empty")
 	}
 	return t, nil
 }
@@ -165,7 +169,7 @@ func (f Files) SaveSession(s Session) (int64, error) {
 	return m, nil
 }
 
-// Wipe deletes the agent token and the ITMO session; state.json holds no secret and stays.
+// Wipe deletes the connection token and the ITMO session; state.json holds no secret and stays.
 func (f Files) Wipe() error {
 	var errs []error
 	for _, p := range []string{f.TokenPath, f.SessionPath()} {
