@@ -34,8 +34,8 @@ docker compose exec agent /itmo-widgets-agent attach   # в Docker
 пишет предупреждение в лог и работает дальше без `attach`. Второй `run` с той же папкой не запустится, пока
 работает первый.
 
-Подключение ([docs/screens/pair.txt](screens/pair.txt), код проверки -
-[docs/screens/pair-code.txt](screens/pair-code.txt)):
+Подключение ([docs/screens/pair.txt](screens/pair.txt), после сканирования -
+[docs/screens/pair-opened.txt](screens/pair-opened.txt)):
 
 ```text
 ITMO.Widgets agent dev · nas

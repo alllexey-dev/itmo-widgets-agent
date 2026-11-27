@@ -70,7 +70,7 @@ type pairView struct {
 	mu      sync.Mutex
 	link    string
 	expires time.Time
-	sas     string
+	opened  bool
 	isu     int64
 	changed chan struct{}
 }
@@ -89,8 +89,8 @@ func (v *pairView) Link(link string, exp time.Time) error {
 	v.set(func() { v.link, v.expires = link, exp })
 	return nil
 }
-func (v *pairView) Opened(sas string) { v.set(func() { v.sas = sas }) }
-func (v *pairView) Paired(isu int64)  { v.set(func() { v.isu = isu }) }
+func (v *pairView) Opened()          { v.set(func() { v.opened = true }) }
+func (v *pairView) Paired(isu int64) { v.set(func() { v.isu = isu }) }
 
 // pair shows the pairing screen; on a failure it offers another try.
 func (a *App) pair(ctx context.Context, renew bool) (int64, error) {
@@ -176,10 +176,9 @@ func (a *App) pairFrame(v *pairView, renew bool, failed error, frame int) string
 		b.WriteString(spinner[frame%len(spinner)] + " Создаём подключение…\n")
 	case v.isu != 0:
 		b.WriteString(green(fmt.Sprintf("✓ Подключено (ISU %d)", v.isu)) + "\n")
-	case v.sas != "":
-		b.WriteString("Телефон открыл ссылку. Код проверки:\n\n")
-		b.WriteString("    " + bold(cyan(v.sas)) + "\n\n")
-		b.WriteString("Сверьте его с экраном телефона и войдите там в ИТМО.\n")
+	case v.opened:
+		b.WriteString("Телефон открыл ссылку.\n\n")
+		b.WriteString("Подтвердите там подключение и войдите в ИТМО.\n")
 		b.WriteString(spinner[frame%len(spinner)] + " Ждём подтверждения…\n")
 	default:
 		b.WriteString("На телефоне: ITMO.Widgets -> " + where + ",\nотсканируйте QR или вставьте ссылку.\n\n")
