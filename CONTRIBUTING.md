@@ -49,7 +49,7 @@ clock is injected.
 | `internal/backend` | Backend client for the routes an agent connection may call (`/api/client/**`, pairing, sport reports) |
 | `internal/itmo` | minimal ITMO.ID and My ITMO client (see below) |
 | `internal/sport` | booking on `SPORT_*_SIGN_LESSONS_PAYLOAD` events |
-| `internal/pair` | pairing (`CONNECT`, `RENEW`): HPKE key, commitment, SAS, QR and link, claim, bundle checks |
+| `internal/pair` | pairing (`CONNECT`, `RENEW`): HPKE key, commitment, QR and link, claim, bundle checks |
 | `internal/state` | `agent-token` (the `iwc_` connection token), `session.json` (own ITMO session with `sid` and its end), `state.json`; atomic writes, mode 0600 |
 | `internal/budget` | per-host request ceiling in the HTTP transport (60 per hour to ITMO) |
 | `internal/notify` | ntfy notifications |
@@ -90,7 +90,7 @@ another agent runs with this directory and `run` exits. Closing the listener rem
 - Backend: `docs/contracts/connections.md` in
   [itmo-widgets-backend](https://github.com/alllexey-dev/itmo-widgets-backend). Event payloads are the push payloads
   of `docs/contracts/notifications.md`. The design is ITMO.Widgets `vibe/plans/connected-clients-plan.md`.
-- Pairing cryptography (HPKE suite, `info`, commitment, SAS, link) is the app's `PairingCrypto` byte for byte, from
+- Pairing cryptography (HPKE suite, `info`, commitment, link) is the app's `PairingCrypto` byte for byte, from
   the ITMO.Widgets session hand-off design: `info` ends with `0x00 || s` and the link fragment starts with `v1.`,
   which the contract's summary leaves out. `internal/pair/pair_test.go` holds an independent sender that must keep
   passing.

@@ -8,7 +8,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
-	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -49,12 +48,6 @@ func senderCommitment(pk, s []byte) string {
 	return raw.EncodeToString(sum[:])
 }
 
-func senderSAS(id, pk, s []byte) string {
-	sum := sha256.Sum256(bytes.Join([][]byte{[]byte("iw-pair-sas-v1"), id, pk, s}, nil))
-	v := fmt.Sprintf("%06d", (binary.BigEndian.Uint32(sum[:4])>>12)%1000000)
-	return v[:3] + " " + v[3:]
-}
-
 type sealArgs struct {
 	pk, s       []byte
 	infoID      string // challenge id bound in info
@@ -91,19 +84,14 @@ func seal(t testing.TB, a sealArgs) string {
 	return raw.EncodeToString(ct)
 }
 
-func TestCommitmentAndSAS(t *testing.T) {
+func TestCommitment(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		target, err := pair.NewTarget()
 		if err != nil {
 			t.Fatal(err)
 		}
-		var id [16]byte
-		rand.Read(id[:])
 		if got, want := pair.Commitment(target.PK, target.Secret), senderCommitment(target.PK, target.Secret); got != want {
 			t.Fatalf("commitment %s, want %s", got, want)
-		}
-		if got, want := pair.SAS(id, target.PK, target.Secret), senderSAS(id[:], target.PK, target.Secret); got != want {
-			t.Fatalf("SAS %s, want %s", got, want)
 		}
 	}
 }
@@ -224,8 +212,11 @@ func (w *world) phone(t *testing.T, kind string, isu int64, expired bool) {
 		if got := w.b.Created[0]["keyCommitment"]; got != senderCommitment(pk, s) {
 			t.Errorf("commitment %q does not match the link", got)
 		}
-		if !strings.Contains(w.out.String(), senderSAS(uuidBytes(t, fake.ChallengeID), pk, s)) {
-			t.Error("verification code not shown")
+		if !strings.Contains(w.out.String(), "Телефон открыл ссылку") {
+			t.Error("the opened link not shown")
+		}
+		if strings.Contains(w.out.String(), "Код проверки") {
+			t.Error("a verification code shown")
 		}
 		sealed := seal(t, sealArgs{pk: pk, s: s, infoID: fake.ChallengeID, infoKind: kind, bundleID: fake.ChallengeID,
 			bundleKind: kind, isu: isu, issuedAt: fake.Now, version: 1})

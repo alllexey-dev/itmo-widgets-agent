@@ -66,15 +66,14 @@ func (f *Flow) Pair(ctx context.Context, renew bool) error {
 	if err != nil {
 		return fmt.Errorf("сервер не создал подключение: %w", err)
 	}
-	id, err := ParseUUID(ch.ID)
-	if err != nil {
+	if _, err := ParseUUID(ch.ID); err != nil {
 		return err
 	}
 	if err := f.View.Link(Link(f.Origin, ch.Code, t.PK, t.Secret), ch.ExpiresAt); err != nil {
 		return err
 	}
 
-	claim, err := f.wait(ctx, ch, SAS(id, t.PK, t.Secret))
+	claim, err := f.wait(ctx, ch)
 	if err != nil {
 		return err
 	}
@@ -110,7 +109,7 @@ func Platform() string {
 }
 
 // wait claims the challenge every 2 seconds until the phone approves it; Backend answers 404 once it expired.
-func (f *Flow) wait(ctx context.Context, ch backend.Challenge, sas string) (backend.Claim, error) {
+func (f *Flow) wait(ctx context.Context, ch backend.Challenge) (backend.Claim, error) {
 	deadline := f.Now().Add(15 * time.Minute)
 	shown := false
 	for f.Now().Before(deadline) {
@@ -128,7 +127,7 @@ func (f *Flow) wait(ctx context.Context, ch backend.Challenge, sas string) (back
 		switch c.Status {
 		case "OPENED":
 			if !shown {
-				f.View.Opened(sas)
+				f.View.Opened()
 				shown = true
 			}
 		case "CLAIMED":
@@ -194,8 +193,8 @@ func (f *Flow) abandon(ctx context.Context, newToken, refresh string) {
 type View interface {
 	// Link shows the QR and the link; expiresAt may be zero.
 	Link(link string, expiresAt time.Time) error
-	// Opened shows the verification code once the phone opened the link.
-	Opened(sas string)
+	// Opened says the phone opened the link and the rest happens there.
+	Opened()
 	Paired(isu int64)
 }
 
@@ -218,8 +217,8 @@ func (t Text) Link(link string, _ time.Time) error {
 	return err
 }
 
-func (t Text) Opened(sas string) {
-	fmt.Fprintf(t.W, "\nКод проверки: %s — сверьте его с экраном телефона и войдите там в ИТМО.\n", sas)
+func (t Text) Opened() {
+	fmt.Fprintln(t.W, "\nТелефон открыл ссылку: подтвердите там подключение и войдите в ИТМО.")
 }
 
 func (t Text) Paired(isu int64) {

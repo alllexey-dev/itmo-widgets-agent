@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Pairing no longer shows a code to compare: once the phone opens the link, `pair` and `renew` say to confirm there
+  and sign in to ITMO. The phone shows the agent's name, version and platform and asks to approve only a QR on the
+  user's own screen. The wire is unchanged, so this works with every app that pairs agents.
+
 ## 0.2.0
 
 Needs Backend with connected clients (`docs/contracts/connections.md`, itmo-widgets-backend PR #58) and an app

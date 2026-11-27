@@ -61,19 +61,6 @@ func Commitment(pk, s []byte) string {
 	return b64.EncodeToString(h.Sum(nil))
 }
 
-// SAS = first 20 bits of SHA-256("iw-pair-sas-v1" || challengeId || pk || s) mod 10^6, as "482 913".
-func SAS(challengeID [16]byte, pk, s []byte) string {
-	h := sha256.New()
-	h.Write([]byte("iw-pair-sas-v1"))
-	h.Write(challengeID[:])
-	h.Write(pk)
-	h.Write(s)
-	d := h.Sum(nil)
-	n := (uint32(d[0])<<12 | uint32(d[1])<<4 | uint32(d[2])>>4) % 1_000_000
-	v := fmt.Sprintf("%06d", n)
-	return v[:3] + " " + v[3:]
-}
-
 // Info = "itmo-widgets pair v1" || 0x00 || challengeId || kind || 0x00 || s.
 func Info(challengeID [16]byte, kind string, s []byte) []byte {
 	out := append([]byte("itmo-widgets pair v1"), 0)
